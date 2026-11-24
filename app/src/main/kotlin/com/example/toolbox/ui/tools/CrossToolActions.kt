@@ -1,6 +1,7 @@
 package com.example.toolbox.ui.tools
 
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -15,6 +16,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
+import com.example.toolbox.ui.main.SyncToolScreenOrientation
+import com.example.toolbox.ui.main.Tool
 import java.io.File
 import java.util.UUID
 
@@ -24,21 +27,106 @@ import java.util.UUID
  */
 object CrossToolActions {
 
-  fun shareFile(context: Context, file: File) {
+  /**
+   * Computes the `ClipDescription` MIME types for a shared [file] so Android's Sharesheet
+   * recognizes both the primary file MIME type and any thumbnail stream type (`image/jpeg` for
+   * videos, `image/png` for SVGs) served by [ToolboxFileProvider].
+   */
+  fun resolveShareClipMimeTypes(file: File, primaryMimeOverride: String? = null): Array<String> {
+    val primaryMime = primaryMimeOverride
+      ?.takeIf { it.isNotBlank() && it != "*/*" }
+      ?: FileManagerEngine.getMimeType(file)
+    return ToolboxFileProvider.computeStreamTypesForFile(file, "*/*")?.let { streamTypes ->
+      if (primaryMime in streamTypes) streamTypes else arrayOf(primaryMime, *streamTypes)
+    } ?: arrayOf(primaryMime)
+  }
+
+  /**
+   * Computes the aggregate MIME type for a multi-file `ACTION_SEND_MULTIPLE` share intent.
+   */
+  fun resolveAggregateShareMimeType(files: List<File>): String {
+    if (files.isEmpty()) return "*/*"
+    if (files.size == 1) return FileManagerEngine.getMimeType(files.first())
+    val mimes = files.map { FileManagerEngine.getMimeType(it) }
+    val allImages = files.indices.all { i ->
+      FileManagerEngine.isImageFile(files[i]) || mimes[i].startsWith("image/")
+    }
+    val allVideos = files.indices.all { i ->
+      FileManagerEngine.isVideoFile(files[i]) || mimes[i].startsWith("video/")
+    }
+    return when {
+      allImages -> "image/*"
+      allVideos -> "video/*"
+      else -> "*/*"
+    }
+  }
+
+  /**
+   * Builds a [ClipData] containing all [uris] and their stream MIME types so that
+   * `Intent.createChooser` grants the Android Sharesheet (`ChooserActivity` / `IntentResolver`)
+   * `FLAG_GRANT_READ_URI_PERMISSION` to render image and video preview thumbnails.
+   */
+  fun buildShareClipData(
+    label: String,
+    files: List<File>,
+    uris: List<Uri>,
+    primaryMimeOverride: String? = null,
+  ): ClipData? {
+    if (uris.isEmpty()) return null
+    val mimeSet = LinkedHashSet<String>()
+    if (files.size == 1) {
+      resolveShareClipMimeTypes(files.first(), primaryMimeOverride).forEach { mimeSet.add(it) }
+    } else {
+      for (file in files) {
+        resolveShareClipMimeTypes(file).forEach { mimeSet.add(it) }
+      }
+    }
+    if (mimeSet.isEmpty()) {
+      mimeSet.add("*/*")
+    }
+    val description = ClipDescription(label, mimeSet.toTypedArray())
+    val clipData = ClipData(description, ClipData.Item(uris.first()))
+    for (i in 1 until uris.size) {
+      clipData.addItem(ClipData.Item(uris[i]))
+    }
+    return clipData
+  }
+
+  fun shareFile(
+    context: Context,
+    file: File,
+    mimeTypeOverride: String? = null,
+    chooserTitle: String? = null,
+  ) {
     try {
+      val mime = mimeTypeOverride
+        ?.takeIf { it.isNotBlank() && it != "*/*" }
+        ?: FileManagerEngine.getMimeType(file)
+      if (FileManagerEngine.isVideoFile(file) || mime.startsWith("video/")) {
+        ToolboxFileProvider.getOrCreateVideoShareThumbnailFile(context, file)
+      }
       val contentUri = FileProvider.getUriForFile(
         context,
         "${context.packageName}.fileprovider",
         file,
       )
-      val mime = FileManagerEngine.getMimeType(file)
+      val title = chooserTitle ?: "Share ${file.name}"
+      val clip = buildShareClipData(
+        label = file.name,
+        files = listOf(file),
+        uris = listOf(contentUri),
+        primaryMimeOverride = mime,
+      )
       val shareIntent = Intent(Intent.ACTION_SEND).apply {
         type = mime
         putExtra(Intent.EXTRA_STREAM, contentUri)
+        putExtra(Intent.EXTRA_TITLE, file.name)
+        clipData = clip
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
       }
-      val chooser = Intent.createChooser(shareIntent, "Share ${file.name}").apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      val chooser = Intent.createChooser(shareIntent, title).apply {
+        clipData = clip
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
       }
       context.startActivity(chooser)
     } catch (e: Exception) {
@@ -46,16 +134,24 @@ object CrossToolActions {
     }
   }
 
-  fun shareMultipleFiles(context: Context, filesToShare: List<File>) {
+  fun shareMultipleFiles(
+    context: Context,
+    filesToShare: List<File>,
+    chooserTitle: String? = null,
+  ) {
     val resolvedFiles = FileManagerEngine.collectShareableFiles(filesToShare)
     if (resolvedFiles.isEmpty()) {
       Toast.makeText(context, "No files to share", Toast.LENGTH_SHORT).show()
     } else if (resolvedFiles.size == 1) {
-      shareFile(context, resolvedFiles.first())
+      shareFile(context, resolvedFiles.first(), chooserTitle = chooserTitle)
     } else {
       try {
         val uris = ArrayList<Uri>(resolvedFiles.size)
         for (f in resolvedFiles) {
+          val mime = FileManagerEngine.getMimeType(f)
+          if (FileManagerEngine.isVideoFile(f) || mime.startsWith("video/")) {
+            ToolboxFileProvider.getOrCreateVideoShareThumbnailFile(context, f)
+          }
           uris.add(
             FileProvider.getUriForFile(
               context,
@@ -64,13 +160,31 @@ object CrossToolActions {
             )
           )
         }
+        val title = chooserTitle ?: "Share ${resolvedFiles.size} files"
+        val aggregateMime = resolveAggregateShareMimeType(resolvedFiles)
+        val clip = buildShareClipData(
+          label = title,
+          files = resolvedFiles,
+          uris = uris,
+        )
+        val allMedia = resolvedFiles.all { f ->
+          val m = FileManagerEngine.getMimeType(f)
+          FileManagerEngine.isImageFile(f) || FileManagerEngine.isVideoFile(f) ||
+            m.startsWith("image/") || m.startsWith("video/")
+        }
         val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-          type = "*/*"
+          type = aggregateMime
+          if (aggregateMime == "*/*" && allMedia) {
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+          }
           putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+          putExtra(Intent.EXTRA_TITLE, title)
+          clipData = clip
           addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        val chooser = Intent.createChooser(shareIntent, "Share ${resolvedFiles.size} files").apply {
-          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val chooser = Intent.createChooser(shareIntent, title).apply {
+          clipData = clip
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(chooser)
       } catch (e: Exception) {
@@ -338,6 +452,7 @@ fun CrossToolFileHostState.RenderSubScreen(
   }
   val activeConverterFile = fileForConverter
   if (activeConverterFile != null) {
+    SyncToolScreenOrientation(tool = Tool.FILE_CONVERTER, restorePreviousOnDispose = true)
     FileConverterScreen(
       modifier = modifier,
       initialFile = activeConverterFile,
@@ -352,6 +467,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activeImageFile = fileForImage
   if (activeImageFile != null) {
+    SyncToolScreenOrientation(tool = Tool.IMAGE, restorePreviousOnDispose = true)
     ImageScreen(
       modifier = modifier,
       initialFile = activeImageFile,
@@ -366,6 +482,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activeImageEditorFile = fileForImageEditor
   if (activeImageEditorFile != null) {
+    SyncToolScreenOrientation(tool = Tool.IMAGE_EDITOR, restorePreviousOnDispose = true)
     ImageEditorScreen(
       modifier = modifier,
       initialFile = activeImageEditorFile,
@@ -379,6 +496,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activeVideoEditorFile = fileForVideoEditor
   if (activeVideoEditorFile != null) {
+    SyncToolScreenOrientation(tool = Tool.VIDEO_EDITOR, restorePreviousOnDispose = true)
     VideoEditorScreen(
       initialFile = activeVideoEditorFile,
       initialDirectory = activeVideoEditorFile.parentFile ?: defaultDirectory,
@@ -393,6 +511,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activeAudioEditorFile = fileForAudioEditor
   if (activeAudioEditorFile != null) {
+    SyncToolScreenOrientation(tool = Tool.AUDIO_EDITOR, restorePreviousOnDispose = true)
     AudioEditorScreen(
       modifier = modifier,
       initialFile = activeAudioEditorFile,
@@ -407,6 +526,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activeArchiveFile = fileForArchive
   if (activeArchiveFile != null) {
+    SyncToolScreenOrientation(tool = Tool.ARCHIVE, restorePreviousOnDispose = true)
     ArchiveScreen(
       modifier = modifier,
       initialFile = activeArchiveFile,
@@ -421,6 +541,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activeCompressionFiles = filesForArchiveCompression
   if (!activeCompressionFiles.isNullOrEmpty()) {
+    SyncToolScreenOrientation(tool = Tool.ARCHIVE, restorePreviousOnDispose = true)
     ArchiveScreen(
       modifier = modifier,
       initialFilesToCompress = activeCompressionFiles,
@@ -435,6 +556,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activePdfViewerFile = fileForPdfViewer
   if (activePdfViewerFile != null) {
+    SyncToolScreenOrientation(tool = Tool.PDF_VIEWER, restorePreviousOnDispose = true)
     PdfViewerScreen(
       modifier = modifier,
       initialFile = activePdfViewerFile,
@@ -450,6 +572,7 @@ fun CrossToolFileHostState.RenderSubScreen(
   val activeMusicFile = fileForMusicPlayer
   if (activeMusicFile != null) {
     val isDir = activeMusicFile.isDirectory
+    SyncToolScreenOrientation(tool = Tool.MUSIC, restorePreviousOnDispose = true)
     MusicPlayerScreen(
       modifier = modifier,
       initialFile = if (isDir) null else activeMusicFile,
@@ -467,6 +590,7 @@ fun CrossToolFileHostState.RenderSubScreen(
   if (activeGalleryTarget != null) {
     val isDir = activeGalleryTarget.isDirectory
     val targetAlbumDir = if (isDir) activeGalleryTarget else (activeGalleryTarget.parentFile ?: defaultDirectory ?: activeGalleryTarget)
+    SyncToolScreenOrientation(tool = Tool.GALLERY, restorePreviousOnDispose = true)
     GalleryScreen(
       modifier = modifier,
       rootDirectory = targetAlbumDir,
@@ -482,6 +606,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activeColorHex = colorHexForColorPicker
   if (activeColorHex != null) {
+    SyncToolScreenOrientation(tool = Tool.COLOR_PICKER, restorePreviousOnDispose = true)
     ColorPickerScreen(
       modifier = modifier,
       initialHexColor = activeColorHex,
@@ -495,6 +620,7 @@ fun CrossToolFileHostState.RenderSubScreen(
 
   val activeFilesDir = directoryForFiles
   if (activeFilesDir != null) {
+    SyncToolScreenOrientation(tool = Tool.FILES, restorePreviousOnDispose = true)
     FilesScreen(
       modifier = modifier,
       initialDirectory = activeFilesDir,

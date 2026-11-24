@@ -1,5 +1,11 @@
 package com.example.toolbox.ui.main
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.os.Build
+import android.view.Surface as AndroidSurface
+import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -16,7 +22,9 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -27,6 +35,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -60,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -84,11 +94,15 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -321,6 +335,193 @@ fun mergeReorderedVisible(
 }
 
 /**
+ * Represents which edge of the current screen window corresponds to the physical bottom
+ * of the device (the hardware charging-port edge in standard portrait `ROTATION_0`), so the
+ * Toolbox navigation bar stays permanently anchored to the physical bottom of the device
+ * regardless of screen rotation.
+ */
+enum class PhysicalBottomDockEdge {
+  /** Standard portrait (`ROTATION_0`): physical bottom is at the bottom edge of the screen. */
+  BOTTOM,
+
+  /** Landscape (`ROTATION_90`, device rotated 90° CCW): physical bottom is at the right edge of the screen. */
+  RIGHT,
+
+  /** Reverse landscape (`ROTATION_270`, device rotated 90° CW): physical bottom is at the left edge of the screen. */
+  LEFT,
+
+  /** Upside-down portrait (`ROTATION_180`): physical bottom is at the top edge of the screen. */
+  TOP,
+}
+
+/**
+ * Maps an Android display rotation constant ([AndroidSurface.ROTATION_0], [AndroidSurface.ROTATION_90],
+ * [AndroidSurface.ROTATION_180], [AndroidSurface.ROTATION_270]) to the [PhysicalBottomDockEdge]
+ * where the physical bottom of the device is located.
+ */
+fun resolvePhysicalBottomDockEdge(displayRotation: Int): PhysicalBottomDockEdge = when (displayRotation) {
+  AndroidSurface.ROTATION_90 -> PhysicalBottomDockEdge.RIGHT
+  AndroidSurface.ROTATION_270 -> PhysicalBottomDockEdge.LEFT
+  AndroidSurface.ROTATION_180 -> PhysicalBottomDockEdge.TOP
+  else -> PhysicalBottomDockEdge.BOTTOM
+}
+
+/**
+ * Returns the [Alignment] within the root container that anchors the navigation bar
+ * to the physical bottom edge of the device.
+ */
+fun PhysicalBottomDockEdge.containerAlignment(): Alignment = when (this) {
+  PhysicalBottomDockEdge.BOTTOM -> Alignment.BottomCenter
+  PhysicalBottomDockEdge.RIGHT -> Alignment.CenterEnd
+  PhysicalBottomDockEdge.LEFT -> Alignment.CenterStart
+  PhysicalBottomDockEdge.TOP -> Alignment.TopCenter
+}
+
+/**
+ * Returns the drag [Orientation] used to pull open or collapse the navigation panel
+ * perpendicular to the physical bottom edge of the device.
+ */
+fun PhysicalBottomDockEdge.dragOrientation(): Orientation = when (this) {
+  PhysicalBottomDockEdge.BOTTOM, PhysicalBottomDockEdge.TOP -> Orientation.Vertical
+  PhysicalBottomDockEdge.RIGHT, PhysicalBottomDockEdge.LEFT -> Orientation.Horizontal
+}
+
+/**
+ * Converts a raw pointer drag delta along [dragOrientation] into an inward panel-expansion delta
+ * (where negative values expand the panel inward toward the center of the screen and positive
+ * values collapse it toward the physical bottom edge, matching `dragStartHeightPx - dragDeltaSumPx`).
+ */
+fun PhysicalBottomDockEdge.toSheetDragDelta(rawDragDelta: Float): Float = when (this) {
+  PhysicalBottomDockEdge.BOTTOM, PhysicalBottomDockEdge.RIGHT -> rawDragDelta
+  PhysicalBottomDockEdge.LEFT, PhysicalBottomDockEdge.TOP -> -rawDragDelta
+}
+
+/**
+ * Returns the content [PaddingValues] that reserves space for the collapsed navigation bar
+ * along the physical bottom edge of the device so tool content is never obscured.
+ */
+fun PhysicalBottomDockEdge.toolContentPadding(inset: Dp): PaddingValues = when (this) {
+  PhysicalBottomDockEdge.BOTTOM -> PaddingValues(bottom = inset)
+  PhysicalBottomDockEdge.RIGHT -> PaddingValues(end = inset)
+  PhysicalBottomDockEdge.LEFT -> PaddingValues(start = inset)
+  PhysicalBottomDockEdge.TOP -> PaddingValues(top = inset)
+}
+
+/**
+ * Reads the current display rotation (`Surface.ROTATION_*`) from the active [Context] / [LocalView],
+ * falling back to [AndroidSurface.ROTATION_90] when the viewport is landscape and no display
+ * rotation is available.
+ */
+@Composable
+fun rememberCurrentDisplayRotation(
+  isLandscapeViewport: Boolean = false,
+): Int {
+  val context = LocalContext.current
+  val view = LocalView.current
+  val configuration = LocalConfiguration.current
+  return remember(context, view, configuration, isLandscapeViewport) {
+    val rawRotation = runCatching {
+      view.display?.rotation
+        ?: context.findDisplayRotation()
+    }.getOrNull()
+    when {
+      rawRotation != null &&
+        (rawRotation != AndroidSurface.ROTATION_0 || !isLandscapeViewport) -> rawRotation
+      isLandscapeViewport -> AndroidSurface.ROTATION_90
+      else -> rawRotation ?: AndroidSurface.ROTATION_0
+    }
+  }
+}
+
+private tailrec fun Context.findDisplayRotation(): Int? {
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+    val displayFromContext = runCatching { display.rotation }.getOrNull()
+    if (displayFromContext != null) return displayFromContext
+  }
+  val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+  @Suppress("DEPRECATION")
+  val wmRotation = runCatching { wm?.defaultDisplay?.rotation }.getOrNull()
+  if (wmRotation != null) return wmRotation
+  return (this as? ContextWrapper)?.baseContext?.findDisplayRotation()
+}
+
+internal tailrec fun Context.findActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext.findActivity()
+  else -> null
+}
+
+/**
+ * Synchronizes the host [Activity.setRequestedOrientation] with [tool]'s [Tool.screenOrientation].
+ * When [restorePreviousOnDispose] is true (e.g. for temporary inline sub-screens), the previous
+ * requestedOrientation is restored when this composable leaves composition.
+ */
+@Composable
+fun SyncToolScreenOrientation(
+  tool: Tool,
+  enabled: Boolean = true,
+  restorePreviousOnDispose: Boolean = false,
+) {
+  if (!enabled || LocalInspectionMode.current) return
+  val context = LocalContext.current
+  DisposableEffect(context, tool, restorePreviousOnDispose) {
+    val activity = context.findActivity()
+    val previousOrientation = activity?.requestedOrientation
+    if (activity != null && activity.requestedOrientation != tool.screenOrientation) {
+      activity.requestedOrientation = tool.screenOrientation
+    }
+    onDispose {
+      if (restorePreviousOnDispose && activity != null && previousOrientation != null) {
+        if (activity.requestedOrientation != previousOrientation) {
+          activity.requestedOrientation = previousOrientation
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Rotates a composable that is laid out horizontally along a physical edge of length [edgeSpanPx]
+ * so that it docks flush against [dockEdge] (with its pull handle facing the screen interior and its
+ * bottom edge anchored to the physical bottom of the device).
+ */
+fun Modifier.orientToPhysicalBottomEdge(
+  dockEdge: PhysicalBottomDockEdge,
+  edgeSpanPx: Int,
+  fixedThicknessPx: Int? = null,
+): Modifier = when (dockEdge) {
+  PhysicalBottomDockEdge.BOTTOM -> this
+  PhysicalBottomDockEdge.TOP -> this.graphicsLayer { rotationZ = 180f }
+  PhysicalBottomDockEdge.RIGHT, PhysicalBottomDockEdge.LEFT -> this
+    .layout { measurable, constraints ->
+      val span = edgeSpanPx.coerceAtLeast(1)
+      val maxThickness = constraints.maxWidth.coerceAtLeast(1)
+      val childConstraints = if (fixedThicknessPx != null) {
+        val clampedThickness = fixedThicknessPx.coerceIn(0, maxThickness)
+        androidx.compose.ui.unit.Constraints.fixed(width = span, height = clampedThickness)
+      } else {
+        androidx.compose.ui.unit.Constraints(
+          minWidth = span,
+          maxWidth = span,
+          minHeight = 0,
+          maxHeight = maxThickness,
+        )
+      }
+      val placeable = measurable.measure(childConstraints)
+      val w = placeable.height
+      val h = placeable.width
+      layout(w, h) {
+        placeable.placeWithLayer(
+          x = (w - placeable.width) / 2,
+          y = (h - placeable.height) / 2,
+        ) {
+          rotationZ = if (dockEdge == PhysicalBottomDockEdge.RIGHT) -90f else 90f
+        }
+      }
+    }
+}
+
+/**
  * Resolves the target [SheetValue] for the tool panel after a vertical drag gesture finishes.
  *
  * - [SheetValue.Hidden] represents the panel dragged to the bottom of the screen, leaving only
@@ -465,6 +666,7 @@ fun ToolboxScaffold(
   initialTools: List<Tool>? = null,
   initialToolsPerRow: Int? = null,
   initialSheetValue: SheetValue = SheetValue.PartiallyExpanded,
+  displayRotationOverride: Int? = null,
   preferencesRepository: NavigationPreferencesRepository? = rememberNavigationPreferencesRepository(),
 ) {
   val persistedToolOrder by preferencesRepository?.toolOrderFlow?.collectAsState()
@@ -525,50 +727,10 @@ fun ToolboxScaffold(
   var isDraggingTool by remember { mutableStateOf(false) }
 
   val density = LocalDensity.current
-  // Native NavigationBar height (80.dp) + compact pull-up handle (26.dp) + bottom clearance + navigation bar insets
-  val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-  val minimizedPeekHeight = TOOL_PANEL_HANDLE_HEIGHT + navBarBottom
-  val basePeekHeight = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) 130.dp else 118.dp
-  val sheetPeekHeight = basePeekHeight + navBarBottom
-
-  val minimizedHeightPx = with(density) { minimizedPeekHeight.toPx() }
-  val collapsedHeightPx = with(density) { sheetPeekHeight.toPx() }
-  val baseExpandedHeight = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) 316.dp else 284.dp
-  val defaultExpandedHeightPx = with(density) { (baseExpandedHeight + navBarBottom).toPx() }
-  val minDragThresholdPx = with(density) { 12.dp.toPx() }
+  val layoutDirection = androidx.compose.ui.platform.LocalLayoutDirection.current
+  val navInsetsPadding = WindowInsets.navigationBars.asPaddingValues()
 
   var sheetValue by rememberSaveable(initialSheetValue) { mutableStateOf(initialSheetValue) }
-  var measuredExpandedHeightPx by remember(toolSorting) { mutableFloatStateOf(defaultExpandedHeightPx) }
-  val expandedHeightPx = maxOf(measuredExpandedHeightPx, collapsedHeightPx)
-
-  var isDraggingSheet by remember { mutableStateOf(false) }
-  var dragStartValue by remember { mutableStateOf(initialSheetValue) }
-  var dragStartHeightPx by remember { mutableFloatStateOf(collapsedHeightPx) }
-  var dragDeltaSumPx by remember { mutableFloatStateOf(0f) }
-  var dragHeightPx by remember { mutableFloatStateOf(collapsedHeightPx) }
-
-  val currentSheetValue by rememberUpdatedState(sheetValue)
-  val currentMinimizedHeightPx by rememberUpdatedState(minimizedHeightPx)
-  val currentCollapsedHeightPx by rememberUpdatedState(collapsedHeightPx)
-  val currentExpandedHeightPx by rememberUpdatedState(expandedHeightPx)
-
-  val sheetDraggableState = rememberDraggableState { deltaY ->
-    dragDeltaSumPx += deltaY
-    dragHeightPx = (dragStartHeightPx - dragDeltaSumPx)
-      .coerceIn(currentMinimizedHeightPx, currentExpandedHeightPx)
-  }
-
-  val isExpanded = sheetValue == SheetValue.Expanded ||
-    (isDraggingSheet && dragHeightPx > collapsedHeightPx + 1f)
-  val isMinimized = !isDraggingSheet && sheetValue == SheetValue.Hidden
-  val currentToolBackgroundColor = toolBackgroundColor(selectedTool)
-
-  val currentVisibleSheetHeightDp = when {
-    isDraggingSheet -> with(density) { dragHeightPx.toDp() }
-    sheetValue == SheetValue.Hidden -> minimizedPeekHeight
-    else -> sheetPeekHeight
-  }
-  val toolContentBottomPadding = minOf(currentVisibleSheetHeightDp, sheetPeekHeight)
   var selectedColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
   var selectedUnitConverterValue by rememberSaveable { mutableStateOf<String?>(null) }
   var selectedUnitConverterFromUnitId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -587,20 +749,91 @@ fun ToolboxScaffold(
     if (returnTo != null) onSelectTool(returnTo)
   }
 
+  val currentToolBackgroundColor = toolBackgroundColor(selectedTool)
+
+  SyncToolScreenOrientation(
+    tool = selectedTool,
+    enabled = displayRotationOverride == null,
+  )
+
   CompositionLocalProvider(
     LocalBackgroundTexture provides backgroundTexture,
     LocalHexagonIconButtons provides hexagonIconButtons,
   ) {
-  Box(
+  BoxWithConstraints(
     modifier = modifier
       .fillMaxSize()
       .toolboxScreenBackground(currentToolBackgroundColor, texture = backgroundTexture),
   ) {
+    val isLandscapeViewport = maxWidth > maxHeight
+    val displayRotation = displayRotationOverride
+      ?: rememberCurrentDisplayRotation(isLandscapeViewport = isLandscapeViewport)
+    val dockEdge = remember(displayRotation) { resolvePhysicalBottomDockEdge(displayRotation) }
+
+    // System navigation bar clearance along the physical bottom edge of the device
+    val navBarEdgeInset = when (dockEdge) {
+      PhysicalBottomDockEdge.BOTTOM -> navInsetsPadding.calculateBottomPadding()
+      PhysicalBottomDockEdge.RIGHT -> navInsetsPadding.calculateRightPadding(layoutDirection)
+      PhysicalBottomDockEdge.LEFT -> navInsetsPadding.calculateLeftPadding(layoutDirection)
+      PhysicalBottomDockEdge.TOP -> navInsetsPadding.calculateTopPadding()
+    }
+
+    // Native NavigationBar height (80.dp) + compact pull-up handle (26.dp) + bottom clearance + navigation bar insets
+    val minimizedPeekHeight = TOOL_PANEL_HANDLE_HEIGHT + navBarEdgeInset
+    val basePeekHeight = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) 130.dp else 118.dp
+    val sheetPeekHeight = basePeekHeight + navBarEdgeInset
+
+    val minimizedHeightPx = with(density) { minimizedPeekHeight.toPx() }
+    val collapsedHeightPx = with(density) { sheetPeekHeight.toPx() }
+    val baseExpandedHeight = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) 316.dp else 284.dp
+    val defaultExpandedHeightPx = with(density) { (baseExpandedHeight + navBarEdgeInset).toPx() }
+    val minDragThresholdPx = with(density) { 12.dp.toPx() }
+
+    var measuredExpandedHeightPx by remember(toolSorting, dockEdge) { mutableFloatStateOf(defaultExpandedHeightPx) }
+    val expandedHeightPx = maxOf(measuredExpandedHeightPx, collapsedHeightPx)
+
+    var isDraggingSheet by remember { mutableStateOf(false) }
+    var dragStartValue by remember { mutableStateOf(initialSheetValue) }
+    var dragStartHeightPx by remember { mutableFloatStateOf(collapsedHeightPx) }
+    var dragDeltaSumPx by remember { mutableFloatStateOf(0f) }
+    var dragHeightPx by remember { mutableFloatStateOf(collapsedHeightPx) }
+
+    val currentSheetValue by rememberUpdatedState(sheetValue)
+    val currentMinimizedHeightPx by rememberUpdatedState(minimizedHeightPx)
+    val currentCollapsedHeightPx by rememberUpdatedState(collapsedHeightPx)
+    val currentExpandedHeightPx by rememberUpdatedState(expandedHeightPx)
+    val currentDockEdge by rememberUpdatedState(dockEdge)
+
+    val sheetDraggableState = rememberDraggableState { rawDelta ->
+      val effectiveDelta = currentDockEdge.toSheetDragDelta(rawDelta)
+      dragDeltaSumPx += effectiveDelta
+      dragHeightPx = (dragStartHeightPx - dragDeltaSumPx)
+        .coerceIn(currentMinimizedHeightPx, currentExpandedHeightPx)
+    }
+
+    val isExpanded = sheetValue == SheetValue.Expanded ||
+      (isDraggingSheet && dragHeightPx > collapsedHeightPx + 1f)
+    val isMinimized = !isDraggingSheet && sheetValue == SheetValue.Hidden
+
+    val currentVisibleSheetHeightDp = when {
+      isDraggingSheet -> with(density) { dragHeightPx.toDp() }
+      sheetValue == SheetValue.Hidden -> minimizedPeekHeight
+      else -> sheetPeekHeight
+    }
+    val toolContentEdgeInset = minOf(currentVisibleSheetHeightDp, sheetPeekHeight)
+    val toolContentBottomPadding = if (dockEdge == PhysicalBottomDockEdge.BOTTOM) toolContentEdgeInset else 0.dp
+    val toolContentSidePadding = if (dockEdge != PhysicalBottomDockEdge.BOTTOM) {
+      dockEdge.toolContentPadding(toolContentEdgeInset)
+    } else {
+      PaddingValues(0.dp)
+    }
+
     Box(
       modifier = Modifier
         .fillMaxSize()
         .toolboxScreenBackground(currentToolBackgroundColor, texture = backgroundTexture)
-        .statusBarsPadding(),
+        .statusBarsPadding()
+        .padding(toolContentSidePadding),
       contentAlignment = Alignment.Center,
     ) {
       // Re-key on each link request so tapping a cross-tool link always updates the target tool
@@ -668,28 +901,58 @@ fun ToolboxScaffold(
       }
     }
 
-    val sheetHeightModifier = when {
-      isDraggingSheet -> Modifier.height(
-        with(density) { dragHeightPx.coerceIn(minimizedHeightPx, expandedHeightPx).toDp() }
-      )
-      sheetValue == SheetValue.Hidden -> Modifier.height(minimizedPeekHeight)
-      sheetValue == SheetValue.PartiallyExpanded -> Modifier.height(sheetPeekHeight)
-      else -> Modifier
+    val fixedThicknessPx = when {
+      isDraggingSheet -> dragHeightPx.coerceIn(minimizedHeightPx, expandedHeightPx).roundToInt()
+      sheetValue == SheetValue.Hidden -> minimizedHeightPx.roundToInt()
+      sheetValue == SheetValue.PartiallyExpanded -> collapsedHeightPx.roundToInt()
+      else -> null
+    }
+    val edgeSpanPx = when (dockEdge) {
+      PhysicalBottomDockEdge.BOTTOM, PhysicalBottomDockEdge.TOP -> constraints.maxWidth
+      PhysicalBottomDockEdge.RIGHT, PhysicalBottomDockEdge.LEFT -> constraints.maxHeight
+    }
+
+    val sheetSizeModifier = when (dockEdge) {
+      PhysicalBottomDockEdge.BOTTOM, PhysicalBottomDockEdge.TOP -> {
+        val heightMod = when {
+          isDraggingSheet -> Modifier.height(
+            with(density) { dragHeightPx.coerceIn(minimizedHeightPx, expandedHeightPx).toDp() }
+          )
+          sheetValue == SheetValue.Hidden -> Modifier.height(minimizedPeekHeight)
+          sheetValue == SheetValue.PartiallyExpanded -> Modifier.height(sheetPeekHeight)
+          else -> Modifier
+        }
+        Modifier
+          .fillMaxWidth()
+          .then(heightMod)
+          .orientToPhysicalBottomEdge(
+            dockEdge = dockEdge,
+            edgeSpanPx = edgeSpanPx,
+            fixedThicknessPx = fixedThicknessPx,
+          )
+      }
+      PhysicalBottomDockEdge.RIGHT, PhysicalBottomDockEdge.LEFT -> {
+        Modifier.orientToPhysicalBottomEdge(
+          dockEdge = dockEdge,
+          edgeSpanPx = edgeSpanPx,
+          fixedThicknessPx = fixedThicknessPx,
+        )
+      }
     }
 
     Surface(
       modifier = Modifier
-        .align(Alignment.BottomCenter)
-        .fillMaxWidth()
-        .then(sheetHeightModifier)
+        .align(dockEdge.containerAlignment())
+        .then(sheetSizeModifier)
         .onSizeChanged { size ->
-          if (sheetValue == SheetValue.Expanded && !isDraggingSheet && size.height > 0) {
-            measuredExpandedHeightPx = size.height.toFloat()
+          val measuredThickness = size.height
+          if (sheetValue == SheetValue.Expanded && !isDraggingSheet && measuredThickness > 0) {
+            measuredExpandedHeightPx = measuredThickness.toFloat()
           }
         }
         .draggable(
           state = sheetDraggableState,
-          orientation = Orientation.Vertical,
+          orientation = dockEdge.dragOrientation(),
           enabled = !isDraggingTool,
           onDragStarted = {
             dragStartValue = currentSheetValue
@@ -715,7 +978,8 @@ fun ToolboxScaffold(
             isDraggingSheet = false
             dragDeltaSumPx = 0f
           },
-        ),
+        )
+        .testTag("toolbox_navigation_bar_surface"),
       shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
       color = NavigationBarDefaults.containerColor,
       tonalElevation = NavigationBarDefaults.Elevation,
@@ -732,6 +996,7 @@ fun ToolboxScaffold(
         themeColor = themeColor,
         isExpanded = isExpanded,
         isMinimized = isMinimized,
+        bottomClearance = navBarEdgeInset,
         onTogglePanel = {
           sheetValue = when (sheetValue) {
             SheetValue.Expanded -> SheetValue.PartiallyExpanded
@@ -794,6 +1059,7 @@ fun ToolsPullUpPanelContent(
   onAddToHomeScreen: ((Tool) -> Unit)? = null,
   onDraggingChanged: (Boolean) -> Unit = {},
   isMinimized: Boolean = false,
+  bottomClearance: Dp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -808,7 +1074,7 @@ fun ToolsPullUpPanelContent(
   Column(
     modifier = modifier
       .fillMaxWidth()
-      .navigationBarsPadding()
+      .padding(bottom = bottomClearance)
       .testTag("tools_pull_up_panel"),
   ) {
     // Compact pull-up handle above the native-style navigation bar
@@ -2339,6 +2605,8 @@ fun StandaloneToolScreen(
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
 ) {
+  SyncToolScreenOrientation(tool = tool)
+
   LaunchedEffect(tool) {
     preferencesRepository.incrementToolUsage(tool)
   }

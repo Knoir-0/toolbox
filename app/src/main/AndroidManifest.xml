@@ -610,7 +610,7 @@
         </activity-alias>
 
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name=".ui.tools.ToolboxFileProvider"
             android:authorities="${applicationId}.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
@@ -689,8 +689,9 @@
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_REFRESH" />
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_ITEM_CLICK" />
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_COMPLETE_TASK" />
+                <action android:name="com.example.toolbox.todo.ACTION_WIDGET_UNDO" />
+                <action android:name="com.example.toolbox.todo.ACTION_WIDGET_REDO" />
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_UNDO_COMPLETE" />
-                <action android:name="com.example.toolbox.todo.ACTION_WIDGET_DISMISS_UNDO" />
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_OPEN_TODO_ADD_TASK" />
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_OPEN_TODO_SCHEDULE" />
             </intent-filter>

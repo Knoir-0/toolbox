@@ -1034,6 +1034,10 @@ class ScreenRecorderForegroundService : Service() {
       } else {
         startForeground(NOTIFICATION_ID, notification)
       }
+      com.example.toolbox.ui.main.NavigationPreferencesBridge.activeRepository?.recordPermissionUsage(
+        com.example.toolbox.ui.main.AppPermission.POST_NOTIFICATIONS,
+        Tool.SCREEN_RECORDER,
+      )
     } catch (_: Throwable) {}
     return START_NOT_STICKY
   }

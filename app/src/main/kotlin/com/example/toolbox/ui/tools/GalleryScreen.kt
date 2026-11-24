@@ -1431,6 +1431,10 @@ fun GalleryScreen(
 
   val activeInlineColorHex = inlineColorPickerHex
   if (activeInlineColorHex != null) {
+    com.example.toolbox.ui.main.SyncToolScreenOrientation(
+      tool = com.example.toolbox.ui.main.Tool.COLOR_PICKER,
+      restorePreviousOnDispose = true,
+    )
     BackHandler {
       inlineColorPickerHex = null
     }
@@ -1458,6 +1462,10 @@ fun GalleryScreen(
 
   val activeImageEditorFile = fileForImageEditor
   if (activeImageEditorFile != null) {
+    com.example.toolbox.ui.main.SyncToolScreenOrientation(
+      tool = com.example.toolbox.ui.main.Tool.IMAGE_EDITOR,
+      restorePreviousOnDispose = true,
+    )
     ImageEditorScreen(
       modifier = modifier,
       initialFile = activeImageEditorFile,
@@ -1471,6 +1479,10 @@ fun GalleryScreen(
 
   val activeVideoEditorFile = fileForVideoEditor
   if (activeVideoEditorFile != null) {
+    com.example.toolbox.ui.main.SyncToolScreenOrientation(
+      tool = com.example.toolbox.ui.main.Tool.VIDEO_EDITOR,
+      restorePreviousOnDispose = true,
+    )
     VideoEditorScreen(
       initialFile = activeVideoEditorFile,
       initialDirectory = currentAlbum?.directory ?: effectiveRootDir,
@@ -6047,46 +6059,14 @@ internal fun sharePhotoFile(context: Context, file: File) {
 
 private fun shareMediaFiles(context: Context, files: List<File>) {
   if (files.isEmpty()) return
-  try {
-    if (files.size == 1) {
-      val file = files.first()
-      val uri = FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        file,
-      )
-      val intent = Intent(Intent.ACTION_SEND).apply {
-        type = FileManagerEngine.getMimeType(file)
-        putExtra(Intent.EXTRA_STREAM, uri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-      }
-      context.startActivity(Intent.createChooser(intent, "Share ${file.name}"))
-    } else {
-      val uris = ArrayList<Uri>(files.size)
-      for (file in files) {
-        val uri = FileProvider.getUriForFile(
-          context,
-          "${context.packageName}.fileprovider",
-          file,
-        )
-        uris.add(uri)
-      }
-      val allVideos = files.all { VideoEditorEngine.isVideoFile(it) }
-      val allImages = files.all { !VideoEditorEngine.isVideoFile(it) }
-      val mimeType = when {
-        allImages -> "image/*"
-        allVideos -> "video/*"
-        else -> "*/*"
-      }
-      val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-        type = mimeType
-        putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-      }
-      context.startActivity(Intent.createChooser(intent, "Share ${files.size} items"))
-    }
-  } catch (_: Exception) {
-    Toast.makeText(context, "Unable to share selected items", Toast.LENGTH_SHORT).show()
+  if (files.size == 1) {
+    CrossToolActions.shareFile(context, files.first())
+  } else {
+    CrossToolActions.shareMultipleFiles(
+      context = context,
+      filesToShare = files,
+      chooserTitle = "Share ${files.size} items",
+    )
   }
 }
 

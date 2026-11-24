@@ -244,6 +244,10 @@ fun ImageScreen(
 
   val activeInlineColorHex = inlineColorPickerHex
   if (activeInlineColorHex != null) {
+    com.example.toolbox.ui.main.SyncToolScreenOrientation(
+      tool = com.example.toolbox.ui.main.Tool.COLOR_PICKER,
+      restorePreviousOnDispose = true,
+    )
     BackHandler {
       inlineColorPickerHex = null
     }
@@ -259,6 +263,10 @@ fun ImageScreen(
 
   val activeImageEditorFile = fileForImageEditor
   if (activeImageEditorFile != null) {
+    com.example.toolbox.ui.main.SyncToolScreenOrientation(
+      tool = com.example.toolbox.ui.main.Tool.IMAGE_EDITOR,
+      restorePreviousOnDispose = true,
+    )
     ImageEditorScreen(
       modifier = modifier,
       initialFile = activeImageEditorFile,
@@ -272,6 +280,10 @@ fun ImageScreen(
 
   val activeVideoEditorFile = fileForVideoEditor
   if (activeVideoEditorFile != null) {
+    com.example.toolbox.ui.main.SyncToolScreenOrientation(
+      tool = com.example.toolbox.ui.main.Tool.VIDEO_EDITOR,
+      restorePreviousOnDispose = true,
+    )
     VideoEditorScreen(
       initialFile = activeVideoEditorFile,
       initialDirectory = activeVideoEditorFile.parentFile ?: initialDirectory,

@@ -29,7 +29,7 @@
             android:orientation="horizontal"
             android:paddingStart="12dp"
             android:paddingTop="8dp"
-            android:paddingEnd="12dp"
+            android:paddingEnd="8dp"
             android:paddingBottom="6dp">
 
             <FrameLayout
@@ -85,6 +85,31 @@
                     android:textColor="#FFCDC4CF"
                     android:textSize="11.5sp" />
             </LinearLayout>
+
+            <!-- Undo & Redo Action Buttons at Top Right -->
+            <ImageView
+                android:id="@+id/widget_todo_undo_button"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:layout_marginStart="4dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Undo"
+                android:padding="7dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_todo_widget_undo"
+                android:tint="#FFE7E1E6" />
+
+            <ImageView
+                android:id="@+id/widget_todo_redo_button"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:layout_marginStart="2dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Redo"
+                android:padding="7dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_todo_widget_redo"
+                android:tint="#FFE7E1E6" />
         </LinearLayout>
 
         <!-- Scrollable Task List & Empty View Container -->
@@ -165,106 +190,18 @@
         </FrameLayout>
     </LinearLayout>
 
-    <!-- Bottom Overlay: Undo Completion Toast Pill (left/start) & Two Floating FABs (bottom-right) -->
+    <!-- Bottom Overlay: Two Floating FABs (bottom-right) -->
     <LinearLayout
         android:id="@+id/widget_todo_bottom_overlay"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:gravity="bottom"
+        android:gravity="bottom|end"
         android:orientation="horizontal"
         android:paddingStart="10dp"
         android:paddingTop="6dp"
         android:paddingEnd="12dp"
         android:paddingBottom="10dp">
-
-        <!-- Undo Completion Toast Banner -->
-        <FrameLayout
-            android:id="@+id/widget_todo_undo_toast_container"
-            android:layout_width="0dp"
-            android:layout_height="40dp"
-            android:layout_marginEnd="8dp"
-            android:layout_weight="1"
-            android:visibility="gone">
-
-            <ImageView
-                android:id="@+id/widget_todo_undo_toast_bg"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:contentDescription="@null"
-                android:scaleType="fitXY"
-                android:src="@drawable/bg_todo_widget_toast" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="12dp"
-                android:paddingEnd="8dp">
-
-                <TextView
-                    android:id="@+id/widget_todo_undo_toast_text"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    android:text="Task completed"
-                    android:textColor="#FFE7E1E6"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                <FrameLayout
-                    android:id="@+id/widget_todo_undo_button"
-                    android:layout_width="wrap_content"
-                    android:layout_height="30dp"
-                    android:layout_marginStart="6dp">
-
-                    <ImageView
-                        android:id="@+id/widget_todo_undo_button_bg"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:contentDescription="@null"
-                        android:scaleType="fitXY"
-                        android:src="@drawable/bg_todo_widget_pill" />
-
-                    <LinearLayout
-                        android:layout_width="wrap_content"
-                        android:layout_height="match_parent"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal"
-                        android:paddingStart="10dp"
-                        android:paddingEnd="10dp">
-
-                        <ImageView
-                            android:id="@+id/widget_todo_undo_icon"
-                            android:layout_width="14dp"
-                            android:layout_height="14dp"
-                            android:contentDescription="@null"
-                            android:scaleType="centerInside"
-                            android:src="@drawable/ic_todo_widget_undo"
-                            android:tint="#FFF3DAFF" />
-
-                        <TextView
-                            android:id="@+id/widget_todo_undo_button_text"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="4dp"
-                            android:text="Undo"
-                            android:textColor="#FFF3DAFF"
-                            android:textSize="11.5sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-                </FrameLayout>
-            </LinearLayout>
-        </FrameLayout>
-
-        <FrameLayout
-            android:id="@+id/widget_todo_bottom_spacer"
-            android:layout_width="0dp"
-            android:layout_height="1dp"
-            android:layout_weight="1" />
 
         <!-- Two Floating FABs at Bottom Right: Schedule FAB and Plus (+) FAB -->
         <LinearLayout

@@ -1,6 +1,5 @@
 package com.example.toolbox.ui.tools
 
-import android.app.AlarmManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
@@ -18,10 +17,7 @@ import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
-import android.widget.Toast
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -48,14 +44,15 @@ import com.example.toolbox.ui.theme.isMusicPlayerAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
 import com.example.toolbox.ui.theme.isStarsSignThemeColorSetting
 import com.example.toolbox.ui.theme.resolveToolboxColorScheme
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Snapshot of the task list, undo toast state, and theme palette rendered by the To-Do Home Screen
- * AppWidget ([TodoListWidgetProvider]).
+ * Snapshot of the task list, undo/redo availability, and theme palette rendered by the To-Do Home
+ * Screen AppWidget ([TodoListWidgetProvider]).
  */
 @Immutable
 data class TodoWidgetState(
@@ -63,76 +60,13 @@ data class TodoWidgetState(
   val totalVisibleCount: Int,
   val completedTodayCount: Int,
   val headerSubtitle: String,
-  val pendingUndoRecord: TodoWidgetUndoRecord?,
-  val isUndoToastVisible: Boolean,
-  val undoToastMessage: String,
+  val canUndo: Boolean,
+  val canRedo: Boolean,
+  val undoStack: List<TodoHistorySnapshot> = emptyList(),
+  val redoStack: List<TodoHistorySnapshot> = emptyList(),
   val palette: TodoWidgetPalette,
   val hexagonIconButtons: Boolean = palette.hexagonIconButtons,
 )
-
-/**
- * Snapshot recorded when a task is completed so the user can tap "Undo" on the widget toast banner
- * to restore the exact pre-completion state.
- */
-@Immutable
-data class TodoWidgetUndoRecord(
-  val completedTaskId: String,
-  val completedTaskTitle: String,
-  val completedAtMillis: Long,
-  val preCompletionSnapshot: TodoHistorySnapshot,
-) {
-  fun isActive(
-    nowMillis: Long = System.currentTimeMillis(),
-    timeoutMillis: Long = TodoListWidgets.UNDO_TOAST_DURATION_MS,
-  ): Boolean = (nowMillis - completedAtMillis) in 0L..timeoutMillis
-
-  fun toJson(): JSONObject = JSONObject().apply {
-    put("completedTaskId", completedTaskId)
-    put("completedTaskTitle", completedTaskTitle)
-    put("completedAtMillis", completedAtMillis)
-    put("completedToday", preCompletionSnapshot.completedToday)
-    val tasksArray = org.json.JSONArray()
-    preCompletionSnapshot.tasks.forEach { tasksArray.put(it.toJson()) }
-    put("tasks", tasksArray)
-    val completedArray = org.json.JSONArray()
-    preCompletionSnapshot.completedTasks.forEach { completedArray.put(it.toJson()) }
-    put("completedTasks", completedArray)
-  }
-
-  companion object {
-    fun fromJson(json: JSONObject?): TodoWidgetUndoRecord? {
-      if (json == null) return null
-      val taskId = json.optString("completedTaskId", "").takeIf { it.isNotBlank() } ?: return null
-      val title = json.optString("completedTaskTitle", "Task")
-      val completedAt = json.optLong("completedAtMillis", 0L).takeIf { it > 0L } ?: return null
-      val completedToday = json.optInt("completedToday", 0).coerceAtLeast(0)
-      val tasks = mutableListOf<TodoItem>()
-      val tasksArray = json.optJSONArray("tasks")
-      if (tasksArray != null) {
-        for (i in 0 until tasksArray.length()) {
-          tasksArray.optJSONObject(i)?.let { tasks.add(TodoItem.fromJson(it)) }
-        }
-      }
-      val completedTasks = mutableListOf<TodoItem>()
-      val completedArray = json.optJSONArray("completedTasks")
-      if (completedArray != null) {
-        for (i in 0 until completedArray.length()) {
-          completedArray.optJSONObject(i)?.let { completedTasks.add(TodoItem.fromJson(it)) }
-        }
-      }
-      return TodoWidgetUndoRecord(
-        completedTaskId = taskId,
-        completedTaskTitle = title,
-        completedAtMillis = completedAt,
-        preCompletionSnapshot = TodoHistorySnapshot(
-          tasks = tasks,
-          completedToday = completedToday,
-          completedTasks = completedTasks,
-        ),
-      )
-    }
-  }
-}
 
 /**
  * Resolved ARGB color tokens used to style the To-Do Home Screen AppWidget according to the user's
@@ -154,8 +88,9 @@ data class TodoWidgetPalette(
   val onSurfaceArgb: Int,
   val onSurfaceVariantArgb: Int,
   val outlineArgb: Int,
-  val toastSurfaceArgb: Int,
-  val toastBorderArgb: Int,
+  val disabledIconArgb: Int = MusicPlayerWidgets.colorToArgb(
+    lerp(Color(surfaceArgb), Color(onSurfaceArgb), 0.38f),
+  ),
   val hexagonIconButtons: Boolean = false,
   val iconButtonBackgroundRes: Int = R.drawable.bg_music_widget_circle,
   val taskCheckUncheckedIconRes: Int = R.drawable.ic_todo_widget_circle_unchecked,
@@ -175,8 +110,7 @@ data class TodoWidgetPalette(
  * - Resizable horizontally and vertically within reasonable bounds
  * - No drag handle or reordering controls in the widget
  * - Keeps the check circle on each task item to complete tasks directly from the home screen
- * - Upon completion, pops up an undo toast (both an interactive in-widget Undo toast pill and a
- *   system Toast) allowing the user to undo the completion
+ * - Features Undo and Redo action buttons at the top-right of the widget header (with no undo popup)
  * - Features two floating circular FABs at the bottom-right: one for Plus (`+`) and one for
  *   Schedule, opening the To-Do tool directly with the "Add a task..." input focused or the
  *   schedule view opened
@@ -186,8 +120,9 @@ object TodoListWidgets {
   const val ACTION_WIDGET_REFRESH = "com.example.toolbox.todo.ACTION_WIDGET_REFRESH"
   const val ACTION_WIDGET_ITEM_CLICK = "com.example.toolbox.todo.ACTION_WIDGET_ITEM_CLICK"
   const val ACTION_WIDGET_COMPLETE_TASK = "com.example.toolbox.todo.ACTION_WIDGET_COMPLETE_TASK"
+  const val ACTION_WIDGET_UNDO = "com.example.toolbox.todo.ACTION_WIDGET_UNDO"
+  const val ACTION_WIDGET_REDO = "com.example.toolbox.todo.ACTION_WIDGET_REDO"
   const val ACTION_WIDGET_UNDO_COMPLETE = "com.example.toolbox.todo.ACTION_WIDGET_UNDO_COMPLETE"
-  const val ACTION_WIDGET_DISMISS_UNDO = "com.example.toolbox.todo.ACTION_WIDGET_DISMISS_UNDO"
   const val ACTION_WIDGET_OPEN_TODO_ADD_TASK = "com.example.toolbox.todo.ACTION_WIDGET_OPEN_TODO_ADD_TASK"
   const val ACTION_WIDGET_OPEN_TODO_SCHEDULE = "com.example.toolbox.todo.ACTION_WIDGET_OPEN_TODO_SCHEDULE"
 
@@ -196,20 +131,25 @@ object TodoListWidgets {
   const val ITEM_CLICK_ACTION_COMPLETE = "complete"
   const val ITEM_CLICK_ACTION_OPEN = "open"
 
+  const val KEY_WIDGET_UNDO_STACK_JSON = "todo_widget_undo_stack_json"
+  const val KEY_WIDGET_REDO_STACK_JSON = "todo_widget_redo_stack_json"
   const val KEY_WIDGET_LAST_UNDO_JSON = "todo_widget_last_undo_json"
-  const val UNDO_TOAST_DURATION_MS = 8_000L
+  const val MAX_HISTORY_STACK_SIZE = 50
 
   const val WIDGET_CORNER_RADIUS_DP = 16f
 
   private const val REQUEST_CODE_OPEN_TODO = 3100
   private const val REQUEST_CODE_ITEM_TEMPLATE = 3101
-  private const val REQUEST_CODE_UNDO_COMPLETE = 3102
-  private const val REQUEST_CODE_DISMISS_UNDO = 3103
+  private const val REQUEST_CODE_UNDO = 3102
+  private const val REQUEST_CODE_REDO = 3103
   private const val REQUEST_CODE_FAB_ADD_TASK = 3104
   private const val REQUEST_CODE_FAB_SCHEDULE = 3105
 
   @Volatile
-  private var inMemoryUndoRecord: TodoWidgetUndoRecord? = null
+  private var inMemoryUndoStack: List<TodoHistorySnapshot> = emptyList()
+
+  @Volatile
+  private var inMemoryRedoStack: List<TodoHistorySnapshot> = emptyList()
 
   /**
    * Refreshes all pinned Home Screen AppWidgets across every Toolbox tool whenever theme colors,
@@ -341,11 +281,7 @@ object TodoListWidgets {
     } else {
       lerp(colorScheme.surfaceVariant, Color.White, 0.45f)
     }
-    val toastSurfaceColor = if (darkTheme) {
-      lerp(surfaceColor, colorScheme.primaryContainer, 0.38f)
-    } else {
-      lerp(colorScheme.surface, colorScheme.primaryContainer, 0.45f)
-    }
+    val disabledIconColor = lerp(surfaceColor, colorScheme.onSurface, 0.38f)
     val hexagonIconButtons = MusicPlayerWidgets.resolveHexagonIconButtonsEnabled(context)
     val backgroundTexture = MusicPlayerWidgets.resolveBackgroundTexture(context)
 
@@ -364,8 +300,7 @@ object TodoListWidgets {
       onSurfaceArgb = MusicPlayerWidgets.colorToArgb(colorScheme.onSurface),
       onSurfaceVariantArgb = MusicPlayerWidgets.colorToArgb(colorScheme.onSurfaceVariant),
       outlineArgb = MusicPlayerWidgets.colorToArgb(colorScheme.outline),
-      toastSurfaceArgb = MusicPlayerWidgets.colorToArgb(toastSurfaceColor),
-      toastBorderArgb = MusicPlayerWidgets.colorToArgb(colorScheme.primary, alphaOverride = 0.55f),
+      disabledIconArgb = MusicPlayerWidgets.colorToArgb(disabledIconColor),
       hexagonIconButtons = hexagonIconButtons,
       iconButtonBackgroundRes = MusicPlayerWidgets.resolveIconButtonBackgroundRes(hexagonIconButtons),
       taskCheckUncheckedIconRes = if (hexagonIconButtons) {
@@ -386,71 +321,151 @@ object TodoListWidgets {
   }
 
   /**
-   * Saves the latest [TodoWidgetUndoRecord] so the user can undo a task completion from the widget
-   * toast banner.
+   * Serializes a [TodoHistorySnapshot] to a [JSONObject].
    */
-  fun saveUndoRecord(
+  fun snapshotToJson(snapshot: TodoHistorySnapshot): JSONObject = JSONObject().apply {
+    put("completedToday", snapshot.completedToday)
+    val tasksArray = JSONArray()
+    snapshot.tasks.forEach { tasksArray.put(it.toJson()) }
+    put("tasks", tasksArray)
+    val completedArray = JSONArray()
+    snapshot.completedTasks.forEach { completedArray.put(it.toJson()) }
+    put("completedTasks", completedArray)
+  }
+
+  /**
+   * Deserializes a [TodoHistorySnapshot] from a [JSONObject].
+   */
+  fun snapshotFromJson(json: JSONObject?): TodoHistorySnapshot? {
+    if (json == null) return null
+    val completedToday = json.optInt("completedToday", 0).coerceAtLeast(0)
+    val tasks = mutableListOf<TodoItem>()
+    val tasksArray = json.optJSONArray("tasks")
+    if (tasksArray != null) {
+      for (i in 0 until tasksArray.length()) {
+        tasksArray.optJSONObject(i)?.let { tasks.add(TodoItem.fromJson(it)) }
+      }
+    }
+    val completedTasks = mutableListOf<TodoItem>()
+    val completedArray = json.optJSONArray("completedTasks")
+    if (completedArray != null) {
+      for (i in 0 until completedArray.length()) {
+        completedArray.optJSONObject(i)?.let { completedTasks.add(TodoItem.fromJson(it)) }
+      }
+    }
+    return TodoHistorySnapshot(
+      tasks = tasks,
+      completedToday = completedToday,
+      completedTasks = completedTasks,
+    )
+  }
+
+  private fun snapshotListToJsonString(snapshots: List<TodoHistorySnapshot>): String {
+    val array = JSONArray()
+    snapshots.take(MAX_HISTORY_STACK_SIZE).forEach { array.put(snapshotToJson(it)) }
+    return array.toString()
+  }
+
+  private fun snapshotListFromJsonString(raw: String?): List<TodoHistorySnapshot> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return try {
+      val array = JSONArray(raw)
+      val result = mutableListOf<TodoHistorySnapshot>()
+      val count = min(array.length(), MAX_HISTORY_STACK_SIZE)
+      for (i in 0 until count) {
+        snapshotFromJson(array.optJSONObject(i))?.let { result.add(it) }
+      }
+      result
+    } catch (_: Throwable) {
+      emptyList()
+    }
+  }
+
+  /**
+   * Saves the current [undoStack] and [redoStack] for the To-Do widget and tool.
+   */
+  fun saveUndoRedoHistory(
     context: Context?,
-    record: TodoWidgetUndoRecord?,
+    undoStack: List<TodoHistorySnapshot>,
+    redoStack: List<TodoHistorySnapshot>,
   ) {
-    inMemoryUndoRecord = record
+    val boundedUndo = undoStack.take(MAX_HISTORY_STACK_SIZE)
+    val boundedRedo = redoStack.take(MAX_HISTORY_STACK_SIZE)
+    inMemoryUndoStack = boundedUndo
+    inMemoryRedoStack = boundedRedo
     if (context == null) return
     try {
       val prefs = context.getSharedPreferences(
         SharedPreferencesTodoListRepository.PREFS_NAME,
         Context.MODE_PRIVATE,
       )
-      if (record == null) {
-        prefs.edit().remove(KEY_WIDGET_LAST_UNDO_JSON).apply()
+      val editor = prefs.edit().remove(KEY_WIDGET_LAST_UNDO_JSON)
+      if (boundedUndo.isEmpty()) {
+        editor.remove(KEY_WIDGET_UNDO_STACK_JSON)
       } else {
-        prefs.edit().putString(KEY_WIDGET_LAST_UNDO_JSON, record.toJson().toString()).apply()
+        editor.putString(KEY_WIDGET_UNDO_STACK_JSON, snapshotListToJsonString(boundedUndo))
       }
+      if (boundedRedo.isEmpty()) {
+        editor.remove(KEY_WIDGET_REDO_STACK_JSON)
+      } else {
+        editor.putString(KEY_WIDGET_REDO_STACK_JSON, snapshotListToJsonString(boundedRedo))
+      }
+      editor.apply()
     } catch (_: Throwable) {}
   }
 
   /**
-   * Loads the active [TodoWidgetUndoRecord] if it has not expired.
+   * Loads the current widget undo history stack.
    */
-  fun loadActiveUndoRecord(
-    context: Context?,
-    nowMillis: Long = System.currentTimeMillis(),
-  ): TodoWidgetUndoRecord? {
-    val persisted = if (context != null) {
+  fun loadUndoStack(context: Context? = null): List<TodoHistorySnapshot> {
+    if (context != null) {
       try {
         val prefs = context.getSharedPreferences(
           SharedPreferencesTodoListRepository.PREFS_NAME,
           Context.MODE_PRIVATE,
         )
-        val raw = prefs.getString(KEY_WIDGET_LAST_UNDO_JSON, null)
-        if (!raw.isNullOrBlank()) {
-          TodoWidgetUndoRecord.fromJson(JSONObject(raw))
-        } else {
-          null
+        if (prefs.contains(KEY_WIDGET_UNDO_STACK_JSON)) {
+          val parsed = snapshotListFromJsonString(prefs.getString(KEY_WIDGET_UNDO_STACK_JSON, null))
+          inMemoryUndoStack = parsed
+          return parsed
         }
-      } catch (_: Throwable) {
-        null
-      }
-    } else {
-      inMemoryUndoRecord
+      } catch (_: Throwable) {}
     }
-    val candidate = persisted ?: inMemoryUndoRecord ?: return null
-    return if (candidate.isActive(nowMillis)) {
-      candidate
-    } else {
-      if (context != null) {
-        saveUndoRecord(context, null)
-      } else {
-        inMemoryUndoRecord = null
-      }
-      null
-    }
+    return inMemoryUndoStack
   }
 
   /**
-   * Clears any in-memory and persisted widget undo state.
+   * Loads the current widget redo history stack.
+   */
+  fun loadRedoStack(context: Context? = null): List<TodoHistorySnapshot> {
+    if (context != null) {
+      try {
+        val prefs = context.getSharedPreferences(
+          SharedPreferencesTodoListRepository.PREFS_NAME,
+          Context.MODE_PRIVATE,
+        )
+        if (prefs.contains(KEY_WIDGET_REDO_STACK_JSON)) {
+          val parsed = snapshotListFromJsonString(prefs.getString(KEY_WIDGET_REDO_STACK_JSON, null))
+          inMemoryRedoStack = parsed
+          return parsed
+        }
+      } catch (_: Throwable) {}
+    }
+    return inMemoryRedoStack
+  }
+
+  /**
+   * Clears any in-memory and persisted widget undo/redo history state.
+   */
+  fun clearUndoRedoHistory(context: Context? = null) {
+    saveUndoRedoHistory(context, emptyList(), emptyList())
+  }
+
+  /**
+   * Alias for [clearUndoRedoHistory] to clear any in-memory and persisted widget undo state.
    */
   fun clearUndoRecord(context: Context? = null) {
-    saveUndoRecord(context, null)
+    clearUndoRedoHistory(context)
   }
 
   /**
@@ -468,22 +483,18 @@ object TodoListWidgets {
     val taskWord = if (visibleTasks.size == 1) "task" else "tasks"
     val headerSubtitle = "${visibleTasks.size} $taskWord • $completedTodayCount completed today"
 
-    val activeUndo = loadActiveUndoRecord(context, nowMillis)
-    val isUndoVisible = activeUndo != null
-    val undoMessage = if (activeUndo != null) {
-      "Completed \"${activeUndo.completedTaskTitle}\""
-    } else {
-      ""
-    }
+    val undoStack = loadUndoStack(context)
+    val redoStack = loadRedoStack(context)
 
     return TodoWidgetState(
       visibleTasks = visibleTasks,
       totalVisibleCount = visibleTasks.size,
       completedTodayCount = completedTodayCount,
       headerSubtitle = headerSubtitle,
-      pendingUndoRecord = activeUndo,
-      isUndoToastVisible = isUndoVisible,
-      undoToastMessage = undoMessage,
+      canUndo = undoStack.isNotEmpty(),
+      canRedo = redoStack.isNotEmpty(),
+      undoStack = undoStack,
+      redoStack = redoStack,
       palette = resolveWidgetPalette(context),
     )
   }
@@ -530,20 +541,20 @@ object TodoListWidgets {
   }
 
   /**
-   * Completes [taskId] from the widget, records the pre-completion snapshot so the user can undo it,
-   * schedules an auto-dismiss refresh for the widget undo toast banner, and shows a system Toast.
+   * Completes [taskId] from the widget, pushes the pre-completion snapshot onto the undo stack,
+   * clears the redo stack, and refreshes the widget without showing any undo popup.
    */
   fun completeTaskFromWidget(
     context: Context?,
     taskId: String,
     repository: TodoListRepository? = context?.let { SharedPreferencesTodoListRepository(it) },
     nowMillis: Long = System.currentTimeMillis(),
-    showSystemToast: Boolean = true,
+    @Suppress("UNUSED_PARAMETER") showSystemToast: Boolean = false,
   ): TodoHistorySnapshot? {
     val repo = repository ?: return null
     val todayKey = getTodayDateKey(nowMillis)
     val currentTasks = repo.loadTasks()
-    val targetTask = currentTasks.firstOrNull { it.id == taskId } ?: return null
+    if (currentTasks.none { it.id == taskId }) return null
     val currentCompletedToday = repo.getCompletedTodayCount(todayKey)
     val currentCompletedTasks = repo.loadCompletedTasks(todayKey)
 
@@ -559,54 +570,57 @@ object TodoListWidgets {
     repo.setCompletedTodayCount(nextSnapshot.completedToday, todayKey)
     repo.saveCompletedTasks(nextSnapshot.completedTasks, todayKey)
 
-    val undoRecord = TodoWidgetUndoRecord(
-      completedTaskId = targetTask.id,
-      completedTaskTitle = targetTask.title,
-      completedAtMillis = nowMillis,
-      preCompletionSnapshot = beforeSnapshot,
+    val nextUndoStack = listOf(beforeSnapshot) + loadUndoStack(context).take(MAX_HISTORY_STACK_SIZE - 1)
+    saveUndoRedoHistory(
+      context = context,
+      undoStack = nextUndoStack,
+      redoStack = emptyList(),
     )
-    saveUndoRecord(context, undoRecord)
 
     if (context != null) {
       TodoListEngine.getTaskIdsToCancelAlarms(currentTasks, nextSnapshot.tasks).forEach { id ->
         TodoNotificationHelper.cancelTaskAlarm(context, id)
       }
       TodoNotificationHelper.syncTaskAlarms(context, nextSnapshot.tasks)
-      scheduleUndoToastExpiryRefresh(context, nowMillis + UNDO_TOAST_DURATION_MS)
       updateAllWidgets(context)
-      if (showSystemToast) {
-        try {
-          Toast.makeText(
-            context,
-            "Completed \"${targetTask.title}\" • Tap Undo on widget to restore",
-            Toast.LENGTH_SHORT,
-          ).show()
-        } catch (_: Throwable) {}
-      }
     }
 
     return nextSnapshot
   }
 
   /**
-   * Undoes the most recent widget task completion using the saved [TodoWidgetUndoRecord].
+   * Undoes the most recent action from the widget's top-right Undo button, pushing the current
+   * state onto the redo stack.
    */
-  fun undoLastCompletedTaskFromWidget(
+  fun undoFromWidget(
     context: Context?,
     repository: TodoListRepository? = context?.let { SharedPreferencesTodoListRepository(it) },
     nowMillis: Long = System.currentTimeMillis(),
-    showSystemToast: Boolean = true,
   ): TodoHistorySnapshot? {
     val repo = repository ?: return null
-    val undoRecord = loadActiveUndoRecord(context, nowMillis) ?: return null
-    val restored = undoRecord.preCompletionSnapshot
+    val currentUndoStack = loadUndoStack(context)
+    if (currentUndoStack.isEmpty()) return null
+
     val todayKey = getTodayDateKey(nowMillis)
     val previousTasks = repo.loadTasks()
+    val currentSnapshot = TodoHistorySnapshot(
+      tasks = previousTasks,
+      completedToday = repo.getCompletedTodayCount(todayKey),
+      completedTasks = repo.loadCompletedTasks(todayKey),
+    )
+
+    val restored = currentUndoStack.first()
+    val remainingUndo = currentUndoStack.drop(1)
+    val nextRedoStack = listOf(currentSnapshot) + loadRedoStack(context).take(MAX_HISTORY_STACK_SIZE - 1)
 
     repo.saveTasks(restored.tasks)
     repo.setCompletedTodayCount(restored.completedToday, todayKey)
     repo.saveCompletedTasks(restored.completedTasks, todayKey)
-    saveUndoRecord(context, null)
+    saveUndoRedoHistory(
+      context = context,
+      undoStack = remainingUndo,
+      redoStack = nextRedoStack,
+    )
 
     if (context != null) {
       TodoListEngine.getTaskIdsToCancelAlarms(previousTasks, restored.tasks).forEach { id ->
@@ -614,38 +628,68 @@ object TodoListWidgets {
       }
       TodoNotificationHelper.syncTaskAlarms(context, restored.tasks)
       updateAllWidgets(context)
-      if (showSystemToast) {
-        try {
-          Toast.makeText(
-            context,
-            "Undid completion of \"${undoRecord.completedTaskTitle}\"",
-            Toast.LENGTH_SHORT,
-          ).show()
-        } catch (_: Throwable) {}
-      }
     }
 
     return restored
   }
 
-  private fun scheduleUndoToastExpiryRefresh(
-    context: Context,
-    triggerAtMillis: Long,
-  ) {
-    try {
-      val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
-      val intent = Intent(context, TodoListWidgetProvider::class.java).apply {
-        action = ACTION_WIDGET_DISMISS_UNDO
-        setPackage(context.packageName)
+  /**
+   * Alias for [undoFromWidget].
+   */
+  fun undoLastCompletedTaskFromWidget(
+    context: Context?,
+    repository: TodoListRepository? = context?.let { SharedPreferencesTodoListRepository(it) },
+    nowMillis: Long = System.currentTimeMillis(),
+    @Suppress("UNUSED_PARAMETER") showSystemToast: Boolean = false,
+  ): TodoHistorySnapshot? = undoFromWidget(
+    context = context,
+    repository = repository,
+    nowMillis = nowMillis,
+  )
+
+  /**
+   * Redoes the most recently undone action from the widget's top-right Redo button, pushing the
+   * current state back onto the undo stack.
+   */
+  fun redoFromWidget(
+    context: Context?,
+    repository: TodoListRepository? = context?.let { SharedPreferencesTodoListRepository(it) },
+    nowMillis: Long = System.currentTimeMillis(),
+  ): TodoHistorySnapshot? {
+    val repo = repository ?: return null
+    val currentRedoStack = loadRedoStack(context)
+    if (currentRedoStack.isEmpty()) return null
+
+    val todayKey = getTodayDateKey(nowMillis)
+    val previousTasks = repo.loadTasks()
+    val currentSnapshot = TodoHistorySnapshot(
+      tasks = previousTasks,
+      completedToday = repo.getCompletedTodayCount(todayKey),
+      completedTasks = repo.loadCompletedTasks(todayKey),
+    )
+
+    val restored = currentRedoStack.first()
+    val remainingRedo = currentRedoStack.drop(1)
+    val nextUndoStack = listOf(currentSnapshot) + loadUndoStack(context).take(MAX_HISTORY_STACK_SIZE - 1)
+
+    repo.saveTasks(restored.tasks)
+    repo.setCompletedTodayCount(restored.completedToday, todayKey)
+    repo.saveCompletedTasks(restored.completedTasks, todayKey)
+    saveUndoRedoHistory(
+      context = context,
+      undoStack = nextUndoStack,
+      redoStack = remainingRedo,
+    )
+
+    if (context != null) {
+      TodoListEngine.getTaskIdsToCancelAlarms(previousTasks, restored.tasks).forEach { id ->
+        TodoNotificationHelper.cancelTaskAlarm(context, id)
       }
-      val pendingIntent = PendingIntent.getBroadcast(
-        context,
-        REQUEST_CODE_DISMISS_UNDO,
-        intent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-      )
-      alarmManager.set(AlarmManager.RTC, triggerAtMillis, pendingIntent)
-    } catch (_: Throwable) {}
+      TodoNotificationHelper.syncTaskAlarms(context, restored.tasks)
+      updateAllWidgets(context)
+    }
+
+    return restored
   }
 
   /**
@@ -702,48 +746,6 @@ object TodoListWidgets {
           style = Paint.Style.STROKE
           strokeWidth = borderWidthPx
           color = palette.borderArgb
-        }
-        canvas.drawRoundRect(borderRect, borderRadius, borderRadius, borderPaint)
-      }
-      bitmap
-    } catch (_: Throwable) {
-      null
-    }
-  }
-
-  /**
-   * Renders the rounded pill background [Bitmap] for the widget's Undo completion toast banner.
-   */
-  fun renderUndoToastBackgroundBitmap(
-    palette: TodoWidgetPalette,
-    widthPx: Int = 360,
-    heightPx: Int = 80,
-    borderWidthPx: Float = 2f,
-  ): Bitmap? {
-    val safeW = widthPx.coerceIn(160, 1000)
-    val safeH = heightPx.coerceIn(48, 200)
-    return try {
-      val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
-      val canvas = Canvas(bitmap)
-      val w = safeW.toFloat()
-      val h = safeH.toFloat()
-      val fillRect = RectF(0f, 0f, w, h)
-      val fillRadius = fillRect.height() * 0.5f
-
-      val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = palette.toastSurfaceArgb
-      }
-      canvas.drawRoundRect(fillRect, fillRadius, fillRadius, fillPaint)
-
-      if (borderWidthPx > 0f) {
-        val strokeInset = max(borderWidthPx, 1f)
-        val borderRect = RectF(strokeInset, strokeInset, w - strokeInset, h - strokeInset)
-        val borderRadius = borderRect.height() * 0.5f
-        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-          style = Paint.Style.STROKE
-          strokeWidth = borderWidthPx
-          color = palette.toastBorderArgb
         }
         canvas.drawRoundRect(borderRect, borderRadius, borderRadius, borderPaint)
       }
@@ -940,8 +942,32 @@ object TodoListWidgets {
     views.setTextColor(R.id.widget_todo_subtext, palette.onSurfaceVariantArgb)
 
     val openTodoIntent = buildOpenTodoListPendingIntent(context)
-    views.setOnClickPendingIntent(R.id.widget_todo_header, openTodoIntent)
+    views.setOnClickPendingIntent(R.id.widget_todo_header_badge, openTodoIntent)
+    views.setOnClickPendingIntent(R.id.widget_todo_header_text_container, openTodoIntent)
     views.setOnClickPendingIntent(R.id.widget_todo_empty_view, openTodoIntent)
+
+    // Top-Right Undo & Redo buttons in Header
+    val undoTint = if (state.canUndo) palette.onSurfaceArgb else palette.disabledIconArgb
+    views.setInt(R.id.widget_todo_undo_button, "setColorFilter", undoTint)
+    views.setInt(R.id.widget_todo_undo_button, "setImageAlpha", if (state.canUndo) 255 else 97)
+    views.setBoolean(R.id.widget_todo_undo_button, "setEnabled", state.canUndo)
+    val undoPendingIntent = buildWidgetBroadcastPendingIntent(
+      context = context,
+      action = ACTION_WIDGET_UNDO,
+      requestCode = REQUEST_CODE_UNDO,
+    )
+    views.setOnClickPendingIntent(R.id.widget_todo_undo_button, undoPendingIntent)
+
+    val redoTint = if (state.canRedo) palette.onSurfaceArgb else palette.disabledIconArgb
+    views.setInt(R.id.widget_todo_redo_button, "setColorFilter", redoTint)
+    views.setInt(R.id.widget_todo_redo_button, "setImageAlpha", if (state.canRedo) 255 else 97)
+    views.setBoolean(R.id.widget_todo_redo_button, "setEnabled", state.canRedo)
+    val redoPendingIntent = buildWidgetBroadcastPendingIntent(
+      context = context,
+      action = ACTION_WIDGET_REDO,
+      requestCode = REQUEST_CODE_REDO,
+    )
+    views.setOnClickPendingIntent(R.id.widget_todo_redo_button, redoPendingIntent)
 
     // Empty state styling
     views.setImageViewResource(R.id.widget_todo_empty_badge_bg, palette.iconButtonBackgroundRes)
@@ -967,36 +993,6 @@ object TodoListWidgets {
       mutable = true,
     )
     views.setPendingIntentTemplate(R.id.widget_todo_list_view, itemTemplatePendingIntent)
-
-    // Undo Toast Banner upon task completion
-    if (state.isUndoToastVisible) {
-      views.setViewVisibility(R.id.widget_todo_undo_toast_container, View.VISIBLE)
-      views.setViewVisibility(R.id.widget_todo_bottom_spacer, View.GONE)
-      renderUndoToastBackgroundBitmap(
-        palette = palette,
-        widthPx = (180f * density).roundToInt().coerceAtLeast(200),
-        heightPx = (40f * density).roundToInt().coerceAtLeast(56),
-        borderWidthPx = max(1f, 1f * density),
-      )?.let { toastBmp ->
-        views.setImageViewBitmap(R.id.widget_todo_undo_toast_bg, toastBmp)
-      }
-      views.setTextViewText(R.id.widget_todo_undo_toast_text, state.undoToastMessage)
-      views.setTextColor(R.id.widget_todo_undo_toast_text, palette.onSurfaceArgb)
-      views.setInt(R.id.widget_todo_undo_button_bg, "setColorFilter", palette.primaryContainerArgb)
-      views.setInt(R.id.widget_todo_undo_icon, "setColorFilter", palette.onPrimaryContainerArgb)
-      views.setTextColor(R.id.widget_todo_undo_button_text, palette.onPrimaryContainerArgb)
-
-      val undoPendingIntent = buildWidgetBroadcastPendingIntent(
-        context = context,
-        action = ACTION_WIDGET_UNDO_COMPLETE,
-        requestCode = REQUEST_CODE_UNDO_COMPLETE,
-      )
-      views.setOnClickPendingIntent(R.id.widget_todo_undo_button, undoPendingIntent)
-      views.setOnClickPendingIntent(R.id.widget_todo_undo_toast_container, undoPendingIntent)
-    } else {
-      views.setViewVisibility(R.id.widget_todo_undo_toast_container, View.GONE)
-      views.setViewVisibility(R.id.widget_todo_bottom_spacer, View.VISIBLE)
-    }
 
     // Two Floating FABs at Bottom Right:
     // 1. Schedule FAB -> opens To Do tool with Schedule view opened
@@ -1056,13 +1052,13 @@ object TodoListWidgets {
         if (context != null) updateAllWidgets(context)
         return true
       }
-      ACTION_WIDGET_DISMISS_UNDO -> {
-        saveUndoRecord(context, null)
-        if (context != null) updateAllWidgets(context)
-        return true
+      ACTION_WIDGET_UNDO,
+      ACTION_WIDGET_UNDO_COMPLETE,
+      -> {
+        return undoFromWidget(context = context, repository = repository) != null
       }
-      ACTION_WIDGET_UNDO_COMPLETE -> {
-        return undoLastCompletedTaskFromWidget(context = context, repository = repository) != null
+      ACTION_WIDGET_REDO -> {
+        return redoFromWidget(context = context, repository = repository) != null
       }
       ACTION_WIDGET_COMPLETE_TASK -> {
         val taskId = intent.getStringExtra(EXTRA_TASK_ID) ?: return false
@@ -1168,7 +1164,7 @@ object TodoListWidgets {
  * - Displays the user's scrollable To-Do task list
  * - Resizable horizontally and vertically within reasonable bounds
  * - No drag-handle or reorder controls; keeps check circles to complete tasks directly
- * - Shows a toast with Undo support upon task completion
+ * - Features Undo and Redo buttons at the top-right of the widget header
  * - Features two floating FABs at the bottom-right (`+` and Schedule) that launch the To-Do tool
  *   with the "Add a task..." input focused or the schedule view opened
  */

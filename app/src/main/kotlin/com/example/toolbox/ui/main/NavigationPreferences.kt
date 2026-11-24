@@ -159,11 +159,10 @@ enum class AppPermission(
     title = "Notifications",
     manifestPermission = "android.permission.POST_NOTIFICATIONS",
     manifestPermissions = listOf("android.permission.POST_NOTIFICATIONS"),
-    description = "Display task reminders, calendar event alerts, plant watering alerts, and media playback notifications",
+    description = "Display task reminders, calendar event alerts, screen recording status, and media playback notifications",
     toolsUsingPermission = listOf(
       Tool.TODO_LIST,
       Tool.CALENDAR,
-      Tool.PLANT_SCHEDULE,
       Tool.MUSIC,
       Tool.SCREEN_RECORDER,
     ),
@@ -175,11 +174,10 @@ enum class AppPermission(
       "android.permission.SCHEDULE_EXACT_ALARM",
       "android.permission.USE_EXACT_ALARM",
     ),
-    description = "Schedule exact-time reminders for tasks, calendar events, and plant care",
+    description = "Schedule exact-time reminders for tasks and calendar events",
     toolsUsingPermission = listOf(
       Tool.TODO_LIST,
       Tool.CALENDAR,
-      Tool.PLANT_SCHEDULE,
     ),
   ),
   NOTIFICATION_LISTENER(
@@ -210,11 +208,10 @@ enum class AppPermission(
     title = "Run at Startup",
     manifestPermission = "android.permission.RECEIVE_BOOT_COMPLETED",
     manifestPermissions = listOf("android.permission.RECEIVE_BOOT_COMPLETED"),
-    description = "Reschedule active task, calendar event, and plant reminders automatically after device reboot",
+    description = "Reschedule active task and calendar event reminders automatically after device reboot",
     toolsUsingPermission = listOf(
       Tool.TODO_LIST,
       Tool.CALENDAR,
-      Tool.PLANT_SCHEDULE,
     ),
   );
 

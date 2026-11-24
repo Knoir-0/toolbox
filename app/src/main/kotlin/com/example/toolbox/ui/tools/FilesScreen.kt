@@ -673,52 +673,11 @@ fun FilesScreen(
   }
 
   fun shareFile(file: File) {
-    try {
-      val contentUri = FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        file,
-      )
-      val mime = FileManagerEngine.getMimeType(file)
-      val shareIntent = Intent(Intent.ACTION_SEND).apply {
-        type = mime
-        putExtra(Intent.EXTRA_STREAM, contentUri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-      }
-      context.startActivity(Intent.createChooser(shareIntent, "Share ${file.name}"))
-    } catch (e: Exception) {
-      Toast.makeText(context, "Could not share file: ${e.message}", Toast.LENGTH_SHORT).show()
-    }
+    CrossToolActions.shareFile(context, file)
   }
 
   fun shareMultipleItems(filesToShare: List<File>) {
-    val resolvedFiles = FileManagerEngine.collectShareableFiles(filesToShare)
-    if (resolvedFiles.isEmpty()) {
-      Toast.makeText(context, "No files to share", Toast.LENGTH_SHORT).show()
-    } else if (resolvedFiles.size == 1) {
-      shareFile(resolvedFiles.first())
-    } else {
-      try {
-        val uris = ArrayList<Uri>(resolvedFiles.size)
-        for (f in resolvedFiles) {
-          uris.add(
-            FileProvider.getUriForFile(
-              context,
-              "${context.packageName}.fileprovider",
-              f,
-            )
-          )
-        }
-        val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-          type = "*/*"
-          putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(shareIntent, "Share ${resolvedFiles.size} files"))
-      } catch (e: Exception) {
-        Toast.makeText(context, "Could not share files: ${e.message}", Toast.LENGTH_SHORT).show()
-      }
-    }
+    CrossToolActions.shareMultipleFiles(context, filesToShare)
   }
 
   fun saveFileToNotes(file: File) {

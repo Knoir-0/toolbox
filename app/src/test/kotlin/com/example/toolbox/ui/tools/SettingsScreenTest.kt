@@ -792,6 +792,22 @@ class SettingsScreenTest {
       ),
       com.example.toolbox.ui.main.AppPermission.STORAGE.toolsUsingPermission,
     )
+    assertEquals(
+      listOf(
+        Tool.TODO_LIST,
+        Tool.CALENDAR,
+        Tool.MUSIC,
+        Tool.SCREEN_RECORDER,
+      ),
+      com.example.toolbox.ui.main.AppPermission.POST_NOTIFICATIONS.toolsUsingPermission,
+    )
+    assertEquals(
+      listOf(
+        Tool.TODO_LIST,
+        Tool.CALENDAR,
+      ),
+      com.example.toolbox.ui.main.AppPermission.SCHEDULE_EXACT_ALARM.toolsUsingPermission,
+    )
 
     // 2. Recording permission usage for specific tools updates counts and timestamps
     val t1 = 1_763_400_000_000L

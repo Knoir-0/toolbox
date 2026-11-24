@@ -419,21 +419,12 @@ fun ArchiveScreen(
         ArchiveEngine.extractEntryToTempFile(context, info.file, entry)
       }
       if (extractedTemp != null) {
-        try {
-          val contentUri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            extractedTemp,
-          )
-          val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = entry.mimeType
-            putExtra(Intent.EXTRA_STREAM, contentUri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-          }
-          context.startActivity(Intent.createChooser(shareIntent, "Share ${entry.name}"))
-        } catch (e: Exception) {
-          Toast.makeText(context, "Could not share ${entry.name}", Toast.LENGTH_SHORT).show()
-        }
+        CrossToolActions.shareFile(
+          context = context,
+          file = extractedTemp,
+          mimeTypeOverride = entry.mimeType,
+          chooserTitle = "Share ${entry.name}",
+        )
       } else {
         Toast.makeText(context, "Could not extract ${entry.name}", Toast.LENGTH_SHORT).show()
       }

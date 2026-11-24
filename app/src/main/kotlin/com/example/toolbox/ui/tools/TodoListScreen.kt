@@ -345,6 +345,8 @@ fun TodoListScreen(
           tasks = latestTasks
           completedTodayCount = latestCompletedToday
           completedTasks = latestCompletedTasks
+          undoStack = TodoListWidgets.loadUndoStack(context)
+          redoStack = TodoListWidgets.loadRedoStack(context)
         }
       }
     }
@@ -460,6 +462,7 @@ fun TodoListScreen(
     repo.setCompletedTodayCount(updatedCompletedToday, getTodayDateKey())
     repo.saveCompletedTasks(updatedCompletedTasks, getTodayDateKey())
     syncAlarmsForTaskUpdate(previousTasks, updatedTasks)
+    TodoListWidgets.saveUndoRedoHistory(context, undoStack, redoStack)
     TodoListWidgets.updateAllWidgets(context)
   }
 
@@ -489,6 +492,7 @@ fun TodoListScreen(
     repo.setCompletedTodayCount(previousState.completedToday, getTodayDateKey())
     repo.saveCompletedTasks(previousState.completedTasks, getTodayDateKey())
     syncAlarmsForTaskUpdate(previousTasks, previousState.tasks)
+    TodoListWidgets.saveUndoRedoHistory(context, undoStack, redoStack)
     TodoListWidgets.updateAllWidgets(context)
   }
 
@@ -510,6 +514,7 @@ fun TodoListScreen(
     repo.setCompletedTodayCount(nextState.completedToday, getTodayDateKey())
     repo.saveCompletedTasks(nextState.completedTasks, getTodayDateKey())
     syncAlarmsForTaskUpdate(previousTasks, nextState.tasks)
+    TodoListWidgets.saveUndoRedoHistory(context, undoStack, redoStack)
     TodoListWidgets.updateAllWidgets(context)
   }
 
@@ -872,6 +877,7 @@ fun TodoListScreen(
       redoStack = emptyList()
       historyVersion += 1
       repo.saveTasks(tasks)
+      TodoListWidgets.saveUndoRedoHistory(context, undoStack, redoStack)
       TodoListWidgets.updateAllWidgets(context)
     }
   }
@@ -944,6 +950,7 @@ fun TodoListScreen(
       redoStack = emptyList()
       historyVersion += 1
       repo.saveTasks(tasks)
+      TodoListWidgets.saveUndoRedoHistory(context, undoStack, redoStack)
       TodoListWidgets.updateAllWidgets(context)
     }
   }

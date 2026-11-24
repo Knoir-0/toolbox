@@ -405,23 +405,12 @@ fun PdfViewerScreen(
             } else {
               srcFile
             }
-          try {
-            val uri: Uri =
-              FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                fileToShare,
-              )
-            val intent =
-              Intent(Intent.ACTION_SEND).apply {
-                type = "application/pdf"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-              }
-            context.startActivity(Intent.createChooser(intent, "Share PDF"))
-          } catch (e: Exception) {
-            Toast.makeText(context, "Unable to share PDF", Toast.LENGTH_SHORT).show()
-          }
+          CrossToolActions.shareFile(
+            context = context,
+            file = fileToShare,
+            mimeTypeOverride = "application/pdf",
+            chooserTitle = "Share PDF",
+          )
         }
       },
       onClose = {

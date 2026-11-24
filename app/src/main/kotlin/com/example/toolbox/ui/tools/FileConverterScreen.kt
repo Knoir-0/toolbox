@@ -1270,17 +1270,12 @@ internal fun copyUriToTempSourceFile(context: Context, uri: Uri): File? {
 }
 
 internal fun shareConvertedFile(context: Context, file: File, mimeType: String) {
-  try {
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val intent = Intent(Intent.ACTION_SEND).apply {
-      type = mimeType
-      putExtra(Intent.EXTRA_STREAM, uri)
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    context.startActivity(Intent.createChooser(intent, "Share ${file.name}"))
-  } catch (_: Exception) {
-    Toast.makeText(context, "Saved at: ${file.absolutePath}", Toast.LENGTH_SHORT).show()
-  }
+  CrossToolActions.shareFile(
+    context = context,
+    file = file,
+    mimeTypeOverride = mimeType,
+    chooserTitle = "Share ${file.name}",
+  )
 }
 
 @Preview(showBackground = true, showSystemUi = true)

@@ -2,10 +2,12 @@ package com.example.toolbox.ui.tools
 
 import com.example.toolbox.ui.theme.toolboxScreenBackground
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.AudioAttributes
 import android.media.AudioManager
@@ -16,6 +18,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -897,6 +900,34 @@ fun MusicPlayerScreen(
   val storagePermissionSettingGranted = com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
     com.example.toolbox.ui.main.AppPermission.STORAGE
   )
+  val notificationPermissionSettingGranted = com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
+    com.example.toolbox.ui.main.AppPermission.POST_NOTIFICATIONS
+  )
+  val mediaNotificationPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission(),
+  ) { granted ->
+    if (granted && !isInspection) {
+      session.syncSystemMediaControls(forceMetadataUpdate = true)
+    }
+  }
+  LaunchedEffect(isPlaying, notificationPermissionSettingGranted, isInspection) {
+    if (!isInspection) {
+      session.syncSystemMediaControls(forceMetadataUpdate = true)
+      if (
+        isPlaying &&
+        notificationPermissionSettingGranted &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(
+          context,
+          Manifest.permission.POST_NOTIFICATIONS,
+        ) != PackageManager.PERMISSION_GRANTED
+      ) {
+        try {
+          mediaNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } catch (_: Throwable) {}
+      }
+    }
+  }
   LaunchedEffect(context, isInspection, storagePermissionSettingGranted) {
     if (!isInspection) {
       session.syncFullFilesPermissionState()

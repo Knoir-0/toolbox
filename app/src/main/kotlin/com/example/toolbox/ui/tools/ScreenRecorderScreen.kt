@@ -1,11 +1,15 @@
 package com.example.toolbox.ui.tools
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -283,6 +287,10 @@ fun ScreenRecorderScreen(
     }
   }
 
+  val notificationPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission(),
+  ) { _ -> }
+
   val projectionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.StartActivityForResult(),
   ) { result ->
@@ -308,6 +316,18 @@ fun ScreenRecorderScreen(
   fun startRecordingWithSource(source: ScreenAudioSource = audioSource) {
     pendingRequestedSource = source
     updateAudioSource(source)
+    if (
+      !isInspection &&
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.POST_NOTIFICATIONS,
+      ) != PackageManager.PERMISSION_GRANTED
+    ) {
+      try {
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+      } catch (_: Throwable) {}
+    }
     if (bypassSystemProjectionPrompt || isInspection) {
       beginRecordingWithResult(source, Activity.RESULT_CANCELED, null)
     } else {

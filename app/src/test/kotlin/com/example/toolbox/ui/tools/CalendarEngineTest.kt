@@ -356,4 +356,49 @@ class CalendarEngineTest {
     assertEquals(today, resetMonth)
     CalendarWidgets.clearInMemoryStateForTesting()
   }
+
+  @Test
+  fun recurringEventReminder_advancesTriggerAndConsumesAlarmOnce() {
+    val startDay = CalendarDay(2026, 11, 20)
+    val startMs = startDay.withTime(10, 0)
+    val endMs = startDay.withTime(11, 0)
+    val recurringEvent = CalendarEvent(
+      id = "rec_alarm_1",
+      title = "Daily Standup",
+      startMillis = startMs,
+      endMillis = endMs,
+      recurrence = CalendarRecurrence.DAILY,
+      reminderMinutesBefore = 30,
+    )
+
+    // 1. At initial day before 9:30 AM, trigger is 9:30 AM on Nov 20
+    val firstTrigger = startDay.withTime(9, 30)
+    assertEquals(firstTrigger, recurringEvent.triggerAlarmAtMillis(nowMillis = startDay.withTime(8, 0)))
+
+    // 2. Consume the first alarm via CalendarEngine.consumeScheduledEventAlarm
+    val repo = InMemoryCalendarRepository(initialEvents = listOf(recurringEvent))
+    val consumedFirst = CalendarEngine.consumeScheduledEventAlarm(
+      repository = repo,
+      eventId = recurringEvent.id,
+      triggerMillis = firstTrigger,
+      nowMillis = firstTrigger,
+    )
+    assertNotNull(consumedFirst)
+    assertEquals(firstTrigger, consumedFirst?.notifiedTriggerMillis)
+
+    // Duplicate alarm firing for the same triggerMillis returns null (idempotent guard)
+    val duplicateFirst = CalendarEngine.consumeScheduledEventAlarm(
+      repository = repo,
+      eventId = recurringEvent.id,
+      triggerMillis = firstTrigger,
+      nowMillis = firstTrigger,
+    )
+    assertNull(duplicateFirst)
+
+    // 3. After first occurrence is notified, triggerAlarmAtMillis advances to Nov 21 at 9:30 AM
+    val nextDay = CalendarDay(2026, 11, 21)
+    val secondTrigger = nextDay.withTime(9, 30)
+    val updatedEvent = repo.loadEvents().first()
+    assertEquals(secondTrigger, updatedEvent.triggerAlarmAtMillis(nowMillis = firstTrigger + 1_000L))
+  }
 }

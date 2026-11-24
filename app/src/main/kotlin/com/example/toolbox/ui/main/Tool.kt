@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.main
 
+import android.content.pm.ActivityInfo
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
@@ -66,188 +67,234 @@ enum class Tool(
   val title: String,
   val icon: ImageVector,
   val category: ToolCategory,
+  val screenOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
 ) {
   CALCULATOR(
     title = "Calculate",
     icon = Icons.Default.Calculate,
     category = ToolCategory.MATH_AND_MEASUREMENT,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   NOTES(
     title = "Notes",
     icon = Icons.AutoMirrored.Filled.StickyNote2,
     category = ToolCategory.PRODUCTIVITY,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
   ),
   TODO_LIST(
     title = "To Do",
     icon = Icons.Default.Checklist,
     category = ToolCategory.PRODUCTIVITY,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   CAMERA(
     title = "Camera",
     icon = Icons.Default.Camera,
     category = ToolCategory.PHOTO_AND_VIDEO,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   GALLERY(
     title = "Gallery",
     icon = Icons.Default.PhotoLibrary,
     category = ToolCategory.PHOTO_AND_VIDEO,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
   ),
   FILES(
     title = "Files",
     icon = Icons.Default.Folder,
     category = ToolCategory.FILES_AND_STORAGE,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   UNIT_CONVERTER(
     title = "Units",
     icon = Icons.Default.Straighten,
     category = ToolCategory.MATH_AND_MEASUREMENT,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   RULER(
     title = "Ruler",
     icon = Icons.Default.SquareFoot,
     category = ToolCategory.MATH_AND_MEASUREMENT,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   AUDIO_RECORDER(
     title = "Record",
     icon = Icons.Default.Mic,
     category = ToolCategory.AUDIO_AND_SOUND,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   MUSIC(
     title = "Music",
     icon = Icons.Default.Headphones,
     category = ToolCategory.AUDIO_AND_SOUND,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   BLUETOOTH_REMOTE(
     title = "Remote",
     icon = Icons.Default.SettingsRemote,
     category = ToolCategory.REMOTES_AND_DEVICES,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   BLUETOOTH_GAMEPAD(
     title = "Gamepad",
     icon = Icons.Default.SportsEsports,
     category = ToolCategory.REMOTES_AND_DEVICES,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,
   ),
   GUITAR_TUNER(
     title = "Tuner",
     icon = TuningForkIcon,
     category = ToolCategory.MUSIC_AND_INSTRUMENTS,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   CHORD_BOOK(
     title = "Chords",
     icon = Icons.Default.LibraryMusic,
     category = ToolCategory.MUSIC_AND_INSTRUMENTS,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
   ),
   RECIPES(
     title = "Recipes",
     icon = Icons.Default.RestaurantMenu,
     category = ToolCategory.MISCELLANEOUS,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   PLANT_SCHEDULE(
     title = "Plants",
     icon = Icons.Default.Yard,
     category = ToolCategory.MISCELLANEOUS,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   DICE_ROLLER(
     title = "Dice",
     icon = Icons.Default.Casino,
     category = ToolCategory.MISCELLANEOUS,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   IMAGE(
     title = "Image",
     icon = Icons.Default.CropOriginal,
     category = ToolCategory.PHOTO_AND_VIDEO,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
   ),
   IMAGE_EDITOR(
     title = "Image Editor",
     icon = Icons.Default.Image,
     category = ToolCategory.PHOTO_AND_VIDEO,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   VIDEO_EDITOR(
     title = "Video Editor",
     icon = Icons.Default.Movie,
     category = ToolCategory.PHOTO_AND_VIDEO,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   SCREEN_RECORDER(
     title = "Screen Recorder",
     icon = Icons.AutoMirrored.Filled.ScreenShare,
     category = ToolCategory.PHOTO_AND_VIDEO,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   AUDIO_EDITOR(
     title = "Audio Editor",
     icon = Icons.Default.GraphicEq,
     category = ToolCategory.AUDIO_AND_SOUND,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   FILE_CONVERTER(
     title = "Convert",
     icon = Icons.Default.SwapHoriz,
     category = ToolCategory.FILES_AND_STORAGE,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   PDF_VIEWER(
     title = "PDF Viewer",
     icon = Icons.Default.PictureAsPdf,
     category = ToolCategory.FILES_AND_STORAGE,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   ARCHIVE(
     title = "Archive",
     icon = Icons.Default.FolderZip,
     category = ToolCategory.FILES_AND_STORAGE,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   DECIBEL_METER(
     title = "Decibels",
     icon = Icons.Default.Speed,
     category = ToolCategory.MATH_AND_MEASUREMENT,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   METRONOME(
     title = "Metronome",
     icon = MetronomeIcon,
     category = ToolCategory.MUSIC_AND_INSTRUMENTS,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   COLOR_PICKER(
     title = "Colors",
     icon = Icons.Default.Palette,
     category = ToolCategory.PHOTO_AND_VIDEO,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   OBD2_SCANNER(
     title = "OBD2",
     icon = Icons.Default.DirectionsCar,
     category = ToolCategory.REMOTES_AND_DEVICES,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   ELEMENTS(
     title = "Elements",
     icon = Icons.Default.Science,
     category = ToolCategory.MATH_AND_MEASUREMENT,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
   ),
   GOOD(
     title = "Good",
     icon = Icons.Default.Mood,
     category = ToolCategory.MISCELLANEOUS,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   STARS(
     title = "Stars",
     icon = StarsMoonSparklesIcon,
     category = ToolCategory.MISCELLANEOUS,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   CALENDAR(
     title = "Calendar",
     icon = Icons.Default.CalendarMonth,
     category = ToolCategory.PRODUCTIVITY,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
   ),
   SEARCH(
     title = "Search",
     icon = Icons.Default.Search,
     category = ToolCategory.SYSTEM,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
   ),
   TERMINAL(
     title = "Terminal",
     icon = Icons.Default.Terminal,
     category = ToolCategory.SYSTEM,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
   ),
   SETTINGS(
     title = "Settings",
     icon = Icons.Default.Settings,
     category = ToolCategory.SYSTEM,
+    screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   ;
+
+  val allowsFreeRotation: Boolean
+    get() = screenOrientation == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+
+  val isPortraitLocked: Boolean
+    get() = screenOrientation == ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
+  val isLandscapeLocked: Boolean
+    get() = screenOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
 
   companion object {
     val ARCHIVES: Tool get() = ARCHIVE

@@ -1,7 +1,11 @@
 package com.example.toolbox.ui.tools
 
+import android.Manifest
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -214,7 +218,15 @@ fun CalendarScreen(
   }
 
   var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+  val notificationPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission(),
+  ) { _ -> }
+
   LaunchedEffect(Unit) {
+    if (!isInspection) {
+      CalendarNotificationHelper.ensureNotificationChannel(context)
+      CalendarNotificationHelper.syncEventAlarms(context, repo.loadEvents())
+    }
     while (true) {
       delay(30_000L)
       nowMillis = System.currentTimeMillis()
@@ -1109,6 +1121,16 @@ fun CalendarScreen(
       },
       onSave = { savedEvent ->
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (
+          !isInspection &&
+          savedEvent.reminderMinutesBefore >= 0 &&
+          Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+          !CalendarNotificationHelper.hasNotificationPermission(context)
+        ) {
+          try {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+          } catch (_: Throwable) {}
+        }
         val updated = if (editingEvent != null) {
           userEvents.map { if (it.id == savedEvent.id) savedEvent else it }
         } else {

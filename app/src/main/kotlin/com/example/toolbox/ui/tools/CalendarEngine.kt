@@ -21,6 +21,9 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.toolbox.R
+import com.example.toolbox.ui.main.AppPermission
+import com.example.toolbox.ui.main.EXTRA_CALENDAR_DATE_KEY
+import com.example.toolbox.ui.main.NavigationPreferencesBridge
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.createStandaloneToolIntent
 import com.example.toolbox.ui.main.createToolShortcutBitmap
@@ -443,9 +446,26 @@ data class CalendarEvent(
   val reminderOption: CalendarReminderOption
     get() = CalendarReminderOption.fromMinutes(reminderMinutesBefore)
 
-  fun triggerAlarmAtMillis(): Long? {
+  fun triggerAlarmAtMillis(nowMillis: Long = System.currentTimeMillis()): Long? {
     if (reminderMinutesBefore < 0 || isBuiltInHoliday || linkedTodoTaskId != null) return null
-    return startMillis - reminderMinutesBefore * 60_000L
+    val leadMillis = reminderMinutesBefore * 60_000L
+    if (recurrence == CalendarRecurrence.NONE) {
+      return startMillis - leadMillis
+    }
+    val initialTrigger = startMillis - leadMillis
+    if (notifiedTriggerMillis != initialTrigger && initialTrigger >= nowMillis - 60_000L) {
+      return initialTrigger
+    }
+    val searchStartDay = maxOf(startDay, CalendarDay.fromMillis(nowMillis).plusDays(-1))
+    for (offset in 0..400) {
+      val candidateDay = searchStartDay.plusDays(offset)
+      val occ = CalendarEngine.occurrenceForDay(this, candidateDay) ?: continue
+      val candidateTrigger = occ.instanceStartMillis - leadMillis
+      if (notifiedTriggerMillis != candidateTrigger && candidateTrigger >= nowMillis - 60_000L) {
+        return candidateTrigger
+      }
+    }
+    return initialTrigger
   }
 
   fun toJson(): JSONObject = JSONObject().apply {
@@ -1339,6 +1359,38 @@ object CalendarEngine {
       .replace("\\;", ";")
       .replace("\\\\", "\\")
   }
+
+  /**
+   * Evaluates a fired reminder alarm against the active events in [repository].
+   * If the event still exists, has reminders enabled, matches [triggerMillis] (when provided),
+   * and has not yet been notified for that trigger timestamp, marks it notified in [repository]
+   * and returns the updated [CalendarEvent]. Returns `null` if the event was deleted, had its
+   * reminder disabled, was rescheduled to a different trigger time, or was already notified.
+   */
+  fun consumeScheduledEventAlarm(
+    repository: CalendarRepository,
+    eventId: String?,
+    triggerMillis: Long? = null,
+    nowMillis: Long = System.currentTimeMillis(),
+  ): CalendarEvent? {
+    if (eventId.isNullOrBlank()) return null
+    val events = repository.loadEvents()
+    val matching = events.firstOrNull { it.id == eventId } ?: return null
+    val expectedTrigger = matching.triggerAlarmAtMillis(nowMillis) ?: return null
+    if (triggerMillis != null && triggerMillis > 0L && triggerMillis != expectedTrigger) {
+      return null
+    }
+    val resolvedTrigger = triggerMillis?.takeIf { it > 0L } ?: expectedTrigger
+    if (matching.notifiedTriggerMillis == resolvedTrigger) {
+      return null
+    }
+    val notifiedEvent = matching.copy(notifiedTriggerMillis = resolvedTrigger)
+    val updated = events.map { ev ->
+      if (ev.id == matching.id) notifiedEvent else ev
+    }
+    repository.saveEvents(updated)
+    return notifiedEvent
+  }
 }
 
 /**
@@ -1377,6 +1429,9 @@ object CalendarNotificationHelper {
   }
 
   fun hasNotificationPermission(context: Context): Boolean {
+    if (!NavigationPreferencesBridge.isPermissionGranted(AppPermission.POST_NOTIFICATIONS)) {
+      return false
+    }
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       ContextCompat.checkSelfPermission(
         context,
@@ -1391,8 +1446,15 @@ object CalendarNotificationHelper {
     ensureNotificationChannel(context)
     if (!hasNotificationPermission(context)) return
 
+    val activeTrigger = event.notifiedTriggerMillis ?: event.triggerAlarmAtMillis()
+    val occurrenceDay = if (activeTrigger != null && event.reminderMinutesBefore >= 0) {
+      CalendarDay.fromMillis(activeTrigger + event.reminderMinutesBefore * 60_000L)
+    } else {
+      event.startDay
+    }
+
     val timeSummary = CalendarEngine.formatTimeRange(event.startMillis, event.endMillis, event.isAllDay)
-    val dateSummary = CalendarEngine.formatDayHeader(event.startDay)
+    val dateSummary = CalendarEngine.formatDayHeader(occurrenceDay)
     val bodyParts = mutableListOf("$dateSummary • $timeSummary")
     if (event.location.isNotBlank()) {
       bodyParts.add("Location: ${event.location}")
@@ -1402,7 +1464,9 @@ object CalendarNotificationHelper {
     }
     val contentText = bodyParts.joinToString("\n")
 
-    val launchIntent = createStandaloneToolIntent(context, Tool.CALENDAR)
+    val launchIntent = createStandaloneToolIntent(context, Tool.CALENDAR).apply {
+      putExtra(EXTRA_CALENDAR_DATE_KEY, occurrenceDay.dateKey)
+    }
     val pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     val contentPendingIntent = PendingIntent.getActivity(
       context,
@@ -1424,7 +1488,7 @@ object CalendarNotificationHelper {
     }
 
     val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-      .setSmallIcon(R.drawable.ic_notification_todo_list)
+      .setSmallIcon(R.drawable.ic_notification_calendar)
       .setColor(event.color.accentColor.toArgb())
       .setContentTitle(event.title)
       .setContentText("$dateSummary • $timeSummary")
@@ -1446,13 +1510,18 @@ object CalendarNotificationHelper {
 
     try {
       NotificationManagerCompat.from(context).notify(event.id.hashCode(), builder.build())
+      NavigationPreferencesBridge.activeRepository?.recordPermissionUsage(
+        AppPermission.POST_NOTIFICATIONS,
+        Tool.CALENDAR,
+      )
     } catch (_: SecurityException) {}
   }
 
   fun scheduleEventAlarm(context: Context, event: CalendarEvent) {
-    val triggerAt = event.triggerAlarmAtMillis() ?: return
+    val now = System.currentTimeMillis()
+    val triggerAt = event.triggerAlarmAtMillis(now) ?: return
     if (event.notifiedTriggerMillis == triggerAt) return
-    if (triggerAt < System.currentTimeMillis() - 60_000L) return
+    if (triggerAt < now - 60_000L) return
 
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
     val intent = Intent(context, CalendarAlarmReceiver::class.java).apply {
@@ -1472,7 +1541,7 @@ object CalendarNotificationHelper {
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
-    val safeTrigger = maxOf(System.currentTimeMillis() + 500L, triggerAt)
+    val safeTrigger = maxOf(now + 500L, triggerAt)
     try {
       val canExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         alarmManager.canScheduleExactAlarms()
@@ -1496,8 +1565,13 @@ object CalendarNotificationHelper {
     scheduledAlarmEventIds.add(event.id)
   }
 
-  fun cancelEventAlarm(context: Context, eventId: String) {
+  fun cancelEventAlarm(context: Context, eventId: String, dismissActiveNotification: Boolean = true) {
     scheduledAlarmEventIds.remove(eventId)
+    if (dismissActiveNotification) {
+      try {
+        NotificationManagerCompat.from(context).cancel(eventId.hashCode())
+      } catch (_: Throwable) {}
+    }
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
     val intent = Intent(context, CalendarAlarmReceiver::class.java).apply {
       action = ACTION_CALENDAR_EVENT_ALARM
@@ -1520,13 +1594,14 @@ object CalendarNotificationHelper {
     val removed = synchronized(scheduledAlarmEventIds) {
       scheduledAlarmEventIds.toSet() - activeIds
     }
-    removed.forEach { cancelEventAlarm(context, it) }
+    removed.forEach { cancelEventAlarm(context, it, dismissActiveNotification = true) }
+    val now = System.currentTimeMillis()
     events.forEach { event ->
-      val trigger = event.triggerAlarmAtMillis()
-      if (trigger != null && event.notifiedTriggerMillis != trigger && trigger >= System.currentTimeMillis() - 60_000L) {
+      val trigger = event.triggerAlarmAtMillis(now)
+      if (trigger != null && event.notifiedTriggerMillis != trigger && trigger >= now - 60_000L) {
         scheduleEventAlarm(context, event)
       } else {
-        cancelEventAlarm(context, event.id)
+        cancelEventAlarm(context, event.id, dismissActiveNotification = false)
       }
     }
   }
@@ -1543,6 +1618,10 @@ class CalendarAlarmReceiver : BroadcastReceiver() {
 
     if (action == Intent.ACTION_BOOT_COMPLETED) {
       CalendarNotificationHelper.syncEventAlarms(context, repo.loadEvents())
+      NavigationPreferencesBridge.activeRepository?.recordPermissionUsage(
+        AppPermission.RECEIVE_BOOT_COMPLETED,
+        Tool.CALENDAR,
+      )
       return
     }
 
@@ -1550,17 +1629,18 @@ class CalendarAlarmReceiver : BroadcastReceiver() {
       val eventId = intent.getStringExtra(CalendarNotificationHelper.EXTRA_EVENT_ID) ?: return
       val triggerMillis = intent.getLongExtra(CalendarNotificationHelper.EXTRA_TRIGGER_MILLIS, -1L)
         .takeIf { it > 0L }
-      val events = repo.loadEvents()
-      val target = events.firstOrNull { it.id == eventId } ?: return
-      val updated = events.map { ev ->
-        if (ev.id == eventId) {
-          ev.copy(notifiedTriggerMillis = triggerMillis ?: ev.triggerAlarmAtMillis())
-        } else {
-          ev
+      val eventToNotify = CalendarEngine.consumeScheduledEventAlarm(
+        repository = repo,
+        eventId = eventId,
+        triggerMillis = triggerMillis,
+      )
+      if (eventToNotify != null) {
+        CalendarNotificationHelper.showEventNotification(context, eventToNotify)
+        // If recurring, immediately schedule the next occurrence's reminder alarm
+        if (eventToNotify.recurrence != CalendarRecurrence.NONE) {
+          CalendarNotificationHelper.scheduleEventAlarm(context, eventToNotify)
         }
       }
-      repo.saveEvents(updated)
-      CalendarNotificationHelper.showEventNotification(context, target)
     }
   }
 }

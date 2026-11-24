@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import android.Manifest
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -15,6 +16,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -13411,6 +13413,25 @@ class MusicPlaybackSession(
     val ctx = appContext ?: return
     ensureMediaNotificationChannel()
     val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+    if (
+      !com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
+        com.example.toolbox.ui.main.AppPermission.POST_NOTIFICATIONS,
+      )
+    ) {
+      try {
+        nm.cancel(MusicPlayerEngine.MEDIA_NOTIFICATION_ID)
+      } catch (_: Throwable) {}
+      return
+    }
+    if (
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      ContextCompat.checkSelfPermission(
+        ctx,
+        Manifest.permission.POST_NOTIFICATIONS,
+      ) != PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
 
     val launchIntent = MusicPlayerEngine.createSystemMediaLaunchIntent(ctx)
     val contentPi = PendingIntent.getActivity(
@@ -13490,7 +13511,13 @@ class MusicPlaybackSession(
       builder.setLargeIcon(artworkBitmap)
     }
 
-    nm.notify(MusicPlayerEngine.MEDIA_NOTIFICATION_ID, builder.build())
+    try {
+      nm.notify(MusicPlayerEngine.MEDIA_NOTIFICATION_ID, builder.build())
+      com.example.toolbox.ui.main.NavigationPreferencesBridge.activeRepository?.recordPermissionUsage(
+        com.example.toolbox.ui.main.AppPermission.POST_NOTIFICATIONS,
+        Tool.MUSIC,
+      )
+    } catch (_: SecurityException) {}
   }
 
   private fun releaseSystemAudioAndMediaControls() {

@@ -178,8 +178,8 @@ fun TerminalScreen(
   val fontSizeSp by controller.fontSizeSp.collectAsState()
   val outputEntries by controller.outputEntries.collectAsState()
 
-  var commandInput by remember { mutableStateOf(TextFieldValue("")) }
-  var historyCursor by remember { mutableIntStateOf(-1) }
+  var commandInput by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+  var historyCursor by rememberSaveable { mutableIntStateOf(-1) }
 
   // Top Bar Search & Command Catalog overlay state (DESIGN_LANGUAGE.md Section 5.7)
   var isSearchActive by rememberSaveable { mutableStateOf(false) }

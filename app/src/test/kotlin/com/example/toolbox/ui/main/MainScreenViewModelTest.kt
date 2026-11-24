@@ -4,6 +4,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SheetValue
 import com.example.toolbox.data.DataRepository
 import junit.framework.TestCase.assertEquals
+import junit.framework.TestCase.assertFalse
+import junit.framework.TestCase.assertTrue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -401,6 +403,139 @@ class MainScreenViewModelTest {
         category = ToolCategory.MATH_AND_MEASUREMENT,
       ),
     )
+  }
+
+  @Test
+  fun resolvePhysicalBottomDockEdge_mapsAllRotationsToPhysicalBottomOfDevice() {
+    assertEquals(
+      PhysicalBottomDockEdge.BOTTOM,
+      resolvePhysicalBottomDockEdge(android.view.Surface.ROTATION_0),
+    )
+    assertEquals(
+      PhysicalBottomDockEdge.RIGHT,
+      resolvePhysicalBottomDockEdge(android.view.Surface.ROTATION_90),
+    )
+    assertEquals(
+      PhysicalBottomDockEdge.TOP,
+      resolvePhysicalBottomDockEdge(android.view.Surface.ROTATION_180),
+    )
+    assertEquals(
+      PhysicalBottomDockEdge.LEFT,
+      resolvePhysicalBottomDockEdge(android.view.Surface.ROTATION_270),
+    )
+  }
+
+  @Test
+  fun physicalBottomDockEdge_dragOrientationAndDeltas_expandInwardFromPhysicalBottom() {
+    assertEquals(
+      androidx.compose.foundation.gestures.Orientation.Vertical,
+      PhysicalBottomDockEdge.BOTTOM.dragOrientation(),
+    )
+    assertEquals(
+      androidx.compose.foundation.gestures.Orientation.Horizontal,
+      PhysicalBottomDockEdge.RIGHT.dragOrientation(),
+    )
+    assertEquals(
+      androidx.compose.foundation.gestures.Orientation.Horizontal,
+      PhysicalBottomDockEdge.LEFT.dragOrientation(),
+    )
+    assertEquals(
+      androidx.compose.foundation.gestures.Orientation.Vertical,
+      PhysicalBottomDockEdge.TOP.dragOrientation(),
+    )
+
+    // Dragging inward from bottom (up: -50f) or right (left: -50f) yields -50f so height increases
+    assertEquals(-50f, PhysicalBottomDockEdge.BOTTOM.toSheetDragDelta(-50f))
+    assertEquals(-50f, PhysicalBottomDockEdge.RIGHT.toSheetDragDelta(-50f))
+    // Dragging inward from left (right: +50f) or top (down: +50f) yields -50f so height increases
+    assertEquals(-50f, PhysicalBottomDockEdge.LEFT.toSheetDragDelta(50f))
+    assertEquals(-50f, PhysicalBottomDockEdge.TOP.toSheetDragDelta(50f))
+  }
+
+  @Test
+  fun toolScreenOrientation_matchesPerToolRotationPolicy() {
+    val expectedRotatableTools = setOf(
+      Tool.NOTES,
+      Tool.GALLERY,
+      Tool.CHORD_BOOK,
+      Tool.IMAGE,
+      Tool.ELEMENTS,
+      Tool.CALENDAR,
+      Tool.SEARCH,
+      Tool.TERMINAL,
+    )
+    val expectedLandscapeTools = setOf(
+      Tool.BLUETOOTH_GAMEPAD,
+    )
+    val expectedPortraitTools = setOf(
+      Tool.CALCULATOR,
+      Tool.TODO_LIST,
+      Tool.CAMERA,
+      Tool.FILES,
+      Tool.UNIT_CONVERTER,
+      Tool.RULER,
+      Tool.AUDIO_RECORDER,
+      Tool.MUSIC,
+      Tool.BLUETOOTH_REMOTE,
+      Tool.GUITAR_TUNER,
+      Tool.RECIPES,
+      Tool.PLANT_SCHEDULE,
+      Tool.DICE_ROLLER,
+      Tool.IMAGE_EDITOR,
+      Tool.VIDEO_EDITOR,
+      Tool.SCREEN_RECORDER,
+      Tool.AUDIO_EDITOR,
+      Tool.FILE_CONVERTER,
+      Tool.PDF_VIEWER,
+      Tool.ARCHIVE,
+      Tool.DECIBEL_METER,
+      Tool.METRONOME,
+      Tool.COLOR_PICKER,
+      Tool.OBD2_SCANNER,
+      Tool.GOOD,
+      Tool.STARS,
+      Tool.SETTINGS,
+    )
+
+    assertEquals(
+      Tool.entries.toSet(),
+      expectedRotatableTools + expectedLandscapeTools + expectedPortraitTools,
+    )
+
+    for (tool in Tool.entries) {
+      when (tool) {
+        in expectedRotatableTools -> {
+          assertEquals(
+            "Expected $tool to allow free rotation",
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
+            tool.screenOrientation,
+          )
+          assertTrue(tool.allowsFreeRotation)
+          assertFalse(tool.isPortraitLocked)
+          assertFalse(tool.isLandscapeLocked)
+        }
+        in expectedLandscapeTools -> {
+          assertEquals(
+            "Expected $tool to lock to sensor landscape",
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,
+            tool.screenOrientation,
+          )
+          assertTrue(tool.isLandscapeLocked)
+          assertFalse(tool.allowsFreeRotation)
+          assertFalse(tool.isPortraitLocked)
+        }
+        else -> {
+          assertEquals(
+            "Expected $tool to lock to portrait",
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+            tool.screenOrientation,
+          )
+          assertTrue(tool.isPortraitLocked)
+          assertFalse(tool.allowsFreeRotation)
+          assertFalse(tool.isLandscapeLocked)
+        }
+      }
+    }
   }
 }
 

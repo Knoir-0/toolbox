@@ -588,6 +588,16 @@ fun openAppPermissionSystemSettings(context: Context, permission: AppPermission)
           return
         }
       }
+      AppPermission.POST_NOTIFICATIONS -> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
+          context.startActivity(intent)
+          return
+        }
+      }
       else -> {}
     }
     val appDetailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {

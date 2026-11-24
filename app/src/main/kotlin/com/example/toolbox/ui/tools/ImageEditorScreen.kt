@@ -2867,17 +2867,12 @@ fun shareBitmap(
     if (!metadata.sanitized().isEmpty) {
       ImageMetadataOperations.writeImageMetadata(file, metadata.sanitized())
     }
-    val contentUri = FileProvider.getUriForFile(
-      context,
-      "${context.packageName}.fileprovider",
-      file,
+    CrossToolActions.shareFile(
+      context = context,
+      file = file,
+      mimeTypeOverride = "image/png",
+      chooserTitle = "Share Image",
     )
-    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-      type = "image/png"
-      putExtra(Intent.EXTRA_STREAM, contentUri)
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    context.startActivity(Intent.createChooser(shareIntent, "Share Image"))
   } catch (e: Exception) {
     e.printStackTrace()
     Toast.makeText(context, "Could not share image", Toast.LENGTH_SHORT).show()

@@ -2,7 +2,9 @@ package com.example.toolbox.ui.main
 
 import android.content.Context
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -1861,5 +1863,107 @@ class MainScreenTest {
     } finally {
       tempDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun navigationBar_remainsFixedToPhysicalBottomOfDevice_acrossAllRotations() {
+    val rotationState = androidx.compose.runtime.mutableIntStateOf(android.view.Surface.ROTATION_0)
+    val selectedToolState = androidx.compose.runtime.mutableStateOf(Tool.CALCULATOR)
+
+    setTestContent {
+      com.example.toolbox.ui.theme.ToolboxTheme {
+        androidx.compose.foundation.layout.Box(
+          modifier = androidx.compose.ui.Modifier
+            .fillMaxSize()
+            .testTag("rotation_test_root"),
+        ) {
+          @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+          ToolboxScaffold(
+            selectedTool = selectedToolState.value,
+            onSelectTool = { selectedToolState.value = it },
+            displayRotationOverride = rotationState.intValue,
+          )
+        }
+      }
+    }
+
+    val rootBounds = composeTestRule.onNodeWithTag("rotation_test_root").fetchSemanticsNode().boundsInRoot
+
+    // 1. Portrait (ROTATION_0): navigation bar is docked along the bottom edge
+    val portraitNavBounds = composeTestRule.onNodeWithTag("toolbox_navigation_bar_surface").fetchSemanticsNode().boundsInRoot
+    org.junit.Assert.assertEquals(rootBounds.bottom, portraitNavBounds.bottom, 2f)
+    assertTrue(portraitNavBounds.top > rootBounds.top)
+
+    // 2. Landscape (ROTATION_90, 90° CCW): physical bottom is on the right edge of the window
+    composeTestRule.runOnUiThread {
+      rotationState.intValue = android.view.Surface.ROTATION_90
+    }
+    composeTestRule.waitForIdle()
+    val landscapeRightNavBounds = composeTestRule.onNodeWithTag("toolbox_navigation_bar_surface").fetchSemanticsNode().boundsInRoot
+    org.junit.Assert.assertEquals(rootBounds.right, landscapeRightNavBounds.right, 2f)
+    org.junit.Assert.assertEquals(rootBounds.height, landscapeRightNavBounds.height, 2f)
+    assertTrue(landscapeRightNavBounds.left > rootBounds.left)
+
+    // Tapping a tool item while docked on the physical bottom (right edge) still switches tools
+    composeTestRule.onAllNodesWithText("Notes").onFirst().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(Tool.NOTES, selectedToolState.value)
+
+    // 3. Reverse Landscape (ROTATION_270, 90° CW): physical bottom is on the left edge of the window
+    composeTestRule.runOnUiThread {
+      rotationState.intValue = android.view.Surface.ROTATION_270
+    }
+    composeTestRule.waitForIdle()
+    val landscapeLeftNavBounds = composeTestRule.onNodeWithTag("toolbox_navigation_bar_surface").fetchSemanticsNode().boundsInRoot
+    org.junit.Assert.assertEquals(rootBounds.left, landscapeLeftNavBounds.left, 2f)
+    org.junit.Assert.assertEquals(rootBounds.height, landscapeLeftNavBounds.height, 2f)
+    assertTrue(landscapeLeftNavBounds.right < rootBounds.right)
+
+    // 4. Upside-Down Portrait (ROTATION_180): physical bottom is on the top edge of the window
+    composeTestRule.runOnUiThread {
+      rotationState.intValue = android.view.Surface.ROTATION_180
+    }
+    composeTestRule.waitForIdle()
+    val upsideDownNavBounds = composeTestRule.onNodeWithTag("toolbox_navigation_bar_surface").fetchSemanticsNode().boundsInRoot
+    org.junit.Assert.assertEquals(rootBounds.top, upsideDownNavBounds.top, 2f)
+    assertTrue(upsideDownNavBounds.bottom < rootBounds.bottom)
+  }
+
+  @Test
+  fun toolSelection_updatesActivityRequestedOrientationAccordingToToolPolicy() {
+    val selectedToolState = androidx.compose.runtime.mutableStateOf(Tool.CALCULATOR)
+
+    setTestContent {
+      com.example.toolbox.ui.theme.ToolboxTheme {
+        @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+        ToolboxScaffold(
+          selectedTool = selectedToolState.value,
+          onSelectTool = { selectedToolState.value = it },
+        )
+      }
+    }
+
+    assertEquals(
+      android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+      composeTestRule.activity.requestedOrientation,
+    )
+
+    composeTestRule.runOnUiThread {
+      selectedToolState.value = Tool.NOTES
+    }
+    composeTestRule.waitForIdle()
+    assertEquals(
+      android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
+      composeTestRule.activity.requestedOrientation,
+    )
+
+    composeTestRule.runOnUiThread {
+      selectedToolState.value = Tool.FILES
+    }
+    composeTestRule.waitForIdle()
+    assertEquals(
+      android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+      composeTestRule.activity.requestedOrientation,
+    )
   }
 }

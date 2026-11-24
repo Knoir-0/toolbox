@@ -19,6 +19,8 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.example.toolbox.R
+import com.example.toolbox.ui.main.AppPermission
+import com.example.toolbox.ui.main.NavigationPreferencesBridge
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.createStandaloneToolIntent
 import com.example.toolbox.ui.main.createToolShortcutBitmap
@@ -64,6 +66,9 @@ object TodoNotificationHelper {
   }
 
   fun hasNotificationPermission(context: Context): Boolean {
+    if (!NavigationPreferencesBridge.isPermissionGranted(AppPermission.POST_NOTIFICATIONS)) {
+      return false
+    }
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       ContextCompat.checkSelfPermission(
         context,
@@ -181,6 +186,10 @@ object TodoNotificationHelper {
 
     try {
       NotificationManagerCompat.from(context).notify(notificationId, notification)
+      NavigationPreferencesBridge.activeRepository?.recordPermissionUsage(
+        AppPermission.POST_NOTIFICATIONS,
+        Tool.TODO_LIST,
+      )
     } catch (_: SecurityException) {
       // Permission might have been revoked
     }
@@ -233,10 +242,15 @@ object TodoNotificationHelper {
   }
 
   /**
-   * Cancels any scheduled alarm for [taskId].
+   * Cancels any scheduled alarm for [taskId] and optionally dismisses any active status-bar notification.
    */
-  fun cancelTaskAlarm(context: Context, taskId: String) {
+  fun cancelTaskAlarm(context: Context, taskId: String, dismissActiveNotification: Boolean = true) {
     scheduledAlarmTaskIds.remove(taskId)
+    if (dismissActiveNotification) {
+      try {
+        NotificationManagerCompat.from(context).cancel(taskId.hashCode())
+      } catch (_: Throwable) {}
+    }
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
     val intent = Intent(context, TodoAlarmReceiver::class.java).apply {
       action = ACTION_TODO_SCHEDULE_ALARM
@@ -264,13 +278,13 @@ object TodoNotificationHelper {
       scheduledAlarmTaskIds.toSet() - activeTaskIds
     }
     removedTaskIds.forEach { taskId ->
-      cancelTaskAlarm(context, taskId)
+      cancelTaskAlarm(context, taskId, dismissActiveNotification = true)
     }
     tasks.forEach { task ->
       if (task.scheduledAtMillis != null && task.notifiedAtScheduleMillis != task.scheduledAtMillis) {
         scheduleTaskAlarm(context, task)
       } else {
-        cancelTaskAlarm(context, task.id)
+        cancelTaskAlarm(context, task.id, dismissActiveNotification = false)
       }
     }
   }
@@ -288,6 +302,10 @@ class TodoAlarmReceiver : BroadcastReceiver() {
     if (action == Intent.ACTION_BOOT_COMPLETED) {
       val tasks = repo.loadTasks()
       TodoNotificationHelper.syncTaskAlarms(context, tasks)
+      NavigationPreferencesBridge.activeRepository?.recordPermissionUsage(
+        AppPermission.RECEIVE_BOOT_COMPLETED,
+        Tool.TODO_LIST,
+      )
       return
     }
 

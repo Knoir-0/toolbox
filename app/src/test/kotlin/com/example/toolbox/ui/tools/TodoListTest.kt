@@ -906,7 +906,7 @@ class TodoListTest {
       completedCount = 1,
     )
 
-    // 1. Initial widget state lists visible tasks, formats subtitles & subtask badges, and hides undo toast
+    // 1. Initial widget state lists visible tasks, formats subtitles & subtask badges, and disables top-right Undo/Redo buttons
     val initialState = TodoListWidgets.resolveWidgetState(
       context = null,
       repository = repo,
@@ -916,19 +916,20 @@ class TodoListTest {
     assertEquals(2, initialState.totalVisibleCount)
     assertEquals(1, initialState.completedTodayCount)
     assertEquals("2 tasks • 1 completed today", initialState.headerSubtitle)
-    assertFalse(initialState.isUndoToastVisible)
-    assertNull(initialState.pendingUndoRecord)
+    assertFalse(initialState.canUndo)
+    assertFalse(initialState.canRedo)
+    assertTrue(initialState.undoStack.isEmpty())
+    assertTrue(initialState.redoStack.isEmpty())
     assertEquals("1/2", TodoListWidgets.formatSubtaskBadgeText(task1))
     assertNull(TodoListWidgets.formatSubtaskBadgeText(task2))
     assertTrue(TodoListWidgets.buildTaskItemSubtitle(task1, now).contains("Banana plug to alligator clip"))
 
-    // 2. Completing a task via check circle moves it to completed, increments today count, and activates undo toast
+    // 2. Completing a task via check circle moves it to completed, increments today count, and enables top-right Undo button
     val afterComplete = TodoListWidgets.completeTaskFromWidget(
       context = null,
       taskId = "w-task-1",
       repository = repo,
       nowMillis = now,
-      showSystemToast = false,
     )
     assertNotNull(afterComplete)
     val stateAfterComplete = TodoListWidgets.resolveWidgetState(
@@ -939,23 +940,21 @@ class TodoListTest {
     assertEquals(listOf("w-task-2"), stateAfterComplete.visibleTasks.map { it.id })
     assertEquals(2, stateAfterComplete.completedTodayCount)
     assertEquals("1 task • 2 completed today", stateAfterComplete.headerSubtitle)
-    assertTrue(stateAfterComplete.isUndoToastVisible)
-    assertEquals("Completed \"Order bench power supply leads\"", stateAfterComplete.undoToastMessage)
-    assertNotNull(stateAfterComplete.pendingUndoRecord)
+    assertTrue(stateAfterComplete.canUndo)
+    assertFalse(stateAfterComplete.canRedo)
+    assertEquals(1, stateAfterComplete.undoStack.size)
 
-    // Verify TodoWidgetUndoRecord JSON round-trip
-    val undoJson = stateAfterComplete.pendingUndoRecord!!.toJson()
-    val restoredUndoRecord = TodoWidgetUndoRecord.fromJson(undoJson)
-    assertNotNull(restoredUndoRecord)
-    assertEquals("w-task-1", restoredUndoRecord!!.completedTaskId)
-    assertEquals(3, restoredUndoRecord.preCompletionSnapshot.tasks.size)
+    // Verify TodoHistorySnapshot JSON round-trip
+    val snapshotJson = TodoListWidgets.snapshotToJson(stateAfterComplete.undoStack.first())
+    val restoredSnapshot = TodoListWidgets.snapshotFromJson(snapshotJson)
+    assertNotNull(restoredSnapshot)
+    assertEquals(3, restoredSnapshot!!.tasks.size)
 
-    // 3. Undoing task completion from the widget toast restores the task & reverts the daily completion counter
-    val afterUndo = TodoListWidgets.undoLastCompletedTaskFromWidget(
+    // 3. Undoing task completion from the widget's top-right Undo button restores the task, reverts the daily counter, and enables Redo
+    val afterUndo = TodoListWidgets.undoFromWidget(
       context = null,
       repository = repo,
       nowMillis = now + 2_000L,
-      showSystemToast = false,
     )
     assertNotNull(afterUndo)
     val stateAfterUndo = TodoListWidgets.resolveWidgetState(
@@ -965,24 +964,26 @@ class TodoListTest {
     )
     assertEquals(listOf("w-task-1", "w-task-2"), stateAfterUndo.visibleTasks.map { it.id })
     assertEquals(1, stateAfterUndo.completedTodayCount)
-    assertFalse(stateAfterUndo.isUndoToastVisible)
-    assertNull(stateAfterUndo.pendingUndoRecord)
+    assertFalse(stateAfterUndo.canUndo)
+    assertTrue(stateAfterUndo.canRedo)
+    assertEquals(1, stateAfterUndo.redoStack.size)
 
-    // 4. Undo toast automatically expires after UNDO_TOAST_DURATION_MS
-    TodoListWidgets.completeTaskFromWidget(
-      context = null,
-      taskId = "w-task-2",
-      repository = repo,
-      nowMillis = now,
-      showSystemToast = false,
-    )
-    val expiredState = TodoListWidgets.resolveWidgetState(
+    // 4. Redoing from the widget's top-right Redo button re-applies the completion and re-enables Undo
+    val afterRedo = TodoListWidgets.redoFromWidget(
       context = null,
       repository = repo,
-      nowMillis = now + TodoListWidgets.UNDO_TOAST_DURATION_MS + 500L,
+      nowMillis = now + 3_000L,
     )
-    assertFalse(expiredState.isUndoToastVisible)
-    assertNull(expiredState.pendingUndoRecord)
+    assertNotNull(afterRedo)
+    val stateAfterRedo = TodoListWidgets.resolveWidgetState(
+      context = null,
+      repository = repo,
+      nowMillis = now + 3_500L,
+    )
+    assertEquals(listOf("w-task-2"), stateAfterRedo.visibleTasks.map { it.id })
+    assertEquals(2, stateAfterRedo.completedTodayCount)
+    assertTrue(stateAfterRedo.canUndo)
+    assertFalse(stateAfterRedo.canRedo)
 
     // 5. Plus (+) and Schedule FAB actions request opening To-Do tool with Add a task focused or Schedule view opened
     TodoListEngine.consumePendingQuickActionRequest()
