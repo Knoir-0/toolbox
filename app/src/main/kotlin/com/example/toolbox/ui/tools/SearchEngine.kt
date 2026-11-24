@@ -440,6 +440,24 @@ object SearchEngine {
       keywords = listOf("search", "find", "lookup", "universal search", "spotlight", "directory", "all tools", "query", "index"),
       sampleQueries = listOf("Calculate", "100 km to mi", "P0420"),
     ),
+    Tool.TERMINAL to ToolSearchMetadata(
+      tool = Tool.TERMINAL,
+      summary = "Android shell terminal (/system/bin/sh) & on-device Wireless ADB loopback (uid=2000)",
+      description = "Execute local shell commands in /system/bin/sh with Toybox utilities and ANSI color output, or switch to Wireless ADB loopback (127.0.0.1) for elevated UID 2000 shell privileges (dumpsys, logcat, pm, wm, cmd).",
+      capabilities = listOf(
+        "Option 1: Local Shell (/system/bin/sh & Toybox Utilities)",
+        "Option 3: Wireless ADB Loopback Client (UID 2000 Privileged Shell)",
+        "mDNS Wireless Debugging Port Auto-Discovery & 6-Digit Pairing",
+        "24+ Built-In Android Command Presets & Custom Command Catalog",
+        "Tactile Extra Keys Row (CTRL+C, TAB Autocomplete, History ↑/↓, Pipes)",
+      ),
+      keywords = listOf(
+        "terminal", "shell", "console", "bash", "sh", "mksh", "toybox", "adb", "wireless adb",
+        "wireless debugging", "ladb", "command line", "cli", "logcat", "dumpsys", "getprop",
+        "uname", "ping", "ip", "netstat", "ps", "top", "pm", "wm", "df",
+      ),
+      sampleQueries = listOf("Terminal", "Wireless ADB", "logcat", "dumpsys"),
+    ),
     Tool.SETTINGS to ToolSearchMetadata(
       tool = Tool.SETTINGS,
       summary = "App theme mode, dynamic colors, accent harmonies, background textures, tool sorting & backup",

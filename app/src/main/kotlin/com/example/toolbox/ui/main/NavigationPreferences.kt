@@ -486,6 +486,7 @@ val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.COLOR_PICKER,
   Tool.OBD2_SCANNER,
   Tool.ELEMENTS,
+  Tool.TERMINAL,
 )
 
 private val LEGACY_DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(

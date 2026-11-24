@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SquareFoot
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Yard
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
@@ -234,6 +235,11 @@ enum class Tool(
   SEARCH(
     title = "Search",
     icon = Icons.Default.Search,
+    category = ToolCategory.SYSTEM,
+  ),
+  TERMINAL(
+    title = "Terminal",
+    icon = Icons.Default.Terminal,
     category = ToolCategory.SYSTEM,
   ),
   SETTINGS(

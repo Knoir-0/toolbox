@@ -142,6 +142,7 @@ import com.example.toolbox.ui.tools.ScreenRecorderScreen
 import com.example.toolbox.ui.tools.SearchScreen
 import com.example.toolbox.ui.tools.SettingsScreen
 import com.example.toolbox.ui.tools.StarsScreen
+import com.example.toolbox.ui.tools.TerminalScreen
 import com.example.toolbox.ui.tools.TodoListScreen
 import com.example.toolbox.ui.tools.UnitConverterScreen
 import com.example.toolbox.ui.tools.VideoEditorScreen
@@ -2548,6 +2549,10 @@ fun ToolContentView(
           }
         },
         preferencesRepository = preferencesRepository,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.TERMINAL -> TerminalScreen(
+        initialDirectory = initialDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SETTINGS -> SettingsScreen(

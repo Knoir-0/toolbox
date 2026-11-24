@@ -145,6 +145,7 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.STARS -> "com.example.toolbox.MainActivityToolStars"
     Tool.CALENDAR -> "com.example.toolbox.MainActivityToolCalendar"
     Tool.SEARCH -> "com.example.toolbox.MainActivityToolSearch"
+    Tool.TERMINAL -> "com.example.toolbox.MainActivityToolTerminal"
     Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
   }
 }
@@ -191,6 +192,7 @@ fun resolveToolShortcutMipmapResId(tool: Tool): Int {
     Tool.STARS -> R.mipmap.ic_tool_stars
     Tool.CALENDAR -> R.mipmap.ic_tool_calendar
     Tool.SEARCH -> R.mipmap.ic_tool_search
+    Tool.TERMINAL -> R.mipmap.ic_tool_terminal
     Tool.SETTINGS -> R.mipmap.ic_tool_settings
   }
 }
