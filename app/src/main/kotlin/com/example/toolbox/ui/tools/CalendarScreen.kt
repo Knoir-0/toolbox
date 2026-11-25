@@ -809,7 +809,19 @@ fun CalendarScreen(
     }
 
     // 3. Main Content Box + Top-Expanding Search Catalog Overlay (Section 5.7)
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .swipeToSwitchPillView(
+          items = CalendarViewMode.entries,
+          selectedItem = viewMode,
+          enabled = !isSearchActive && !isSelectionMode,
+          onSelectItem = { mode ->
+            viewMode = mode
+            repo.setViewMode(mode)
+          },
+        ),
+    ) {
       when (viewMode) {
         CalendarViewMode.MONTH -> {
           GoogleCalendarMonthView(
@@ -937,10 +949,42 @@ fun CalendarScreen(
           )
         }
 
+        val searchFilterPillIndices = remember {
+          (0 until (2 + CalendarCategory.entries.size)).toList()
+        }
+        val activeSearchFilterPillIndex = when {
+          searchFavoritesOnly -> 1
+          searchCategoryFilter != null -> 2 + CalendarCategory.entries.indexOf(searchCategoryFilter)
+          else -> 0
+        }
+
         Surface(
           color = MaterialTheme.colorScheme.background,
           modifier = Modifier
             .fillMaxSize()
+            .swipeToSwitchPillView(
+              items = searchFilterPillIndices,
+              selectedItem = activeSearchFilterPillIndex,
+              onSelectItem = { idx ->
+                when (idx) {
+                  0 -> {
+                    searchCategoryFilterName = null
+                    searchFavoritesOnly = false
+                  }
+                  1 -> {
+                    searchCategoryFilterName = null
+                    searchFavoritesOnly = true
+                  }
+                  else -> {
+                    val cat = CalendarCategory.entries.getOrNull(idx - 2)
+                    if (cat != null) {
+                      searchFavoritesOnly = false
+                      searchCategoryFilterName = cat.name
+                    }
+                  }
+                }
+              },
+            )
             .testTag("calendar_search_overlay"),
         ) {
           Column(modifier = Modifier.fillMaxSize()) {

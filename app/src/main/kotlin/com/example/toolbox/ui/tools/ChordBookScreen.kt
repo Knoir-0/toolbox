@@ -546,7 +546,16 @@ fun ChordBookScreen(
         .fillMaxSize()
         .weight(1f),
     ) {
-      Column(modifier = Modifier.fillMaxSize()) {
+      Column(
+        modifier = Modifier
+          .fillMaxSize()
+          .swipeToSwitchPillView(
+            items = ChordBookTab.entries,
+            selectedItem = activeTab,
+            enabled = !isSearchActive,
+            onSelectItem = { activeTab = it },
+          ),
+      ) {
         // 2. Mode Switcher Pill Bar (styled in line with Files & Music pill selectors)
         ToolboxPillNavigationBar(
           rowTestTag = "chord_book_pill_bar",
@@ -4018,10 +4027,43 @@ private fun ChordTuningCatalogSearchOverlay(
         }
       }
 
+      val tuningSearchPillIndices = remember {
+        (0 until (2 + GuitarTuningCategory.entries.size)).toList()
+      }
+      val activeTuningSearchPillIndex = when {
+        favoritesOnly -> 1
+        selectedCategory != null -> 2 + GuitarTuningCategory.entries.indexOf(selectedCategory)
+        else -> 0
+      }
+
       LazyColumn(
         modifier = Modifier
           .fillMaxSize()
           .weight(1f)
+          .swipeToSwitchPillView(
+            items = tuningSearchPillIndices,
+            selectedItem = activeTuningSearchPillIndex,
+            onSelectItem = { idx ->
+              when (idx) {
+                0 -> {
+                  if (favoritesOnly) onToggleFavoritesOnly()
+                  onSelectCategory(null)
+                  onSelectInstrument(null)
+                }
+                1 -> {
+                  if (!favoritesOnly) onToggleFavoritesOnly()
+                  onSelectCategory(null)
+                }
+                else -> {
+                  val cat = GuitarTuningCategory.entries.getOrNull(idx - 2)
+                  if (cat != null) {
+                    if (favoritesOnly) onToggleFavoritesOnly()
+                    onSelectCategory(cat)
+                  }
+                }
+              }
+            },
+          )
           .testTag("catalog_results_section"),
         contentPadding = PaddingValues(
           start = 16.dp,

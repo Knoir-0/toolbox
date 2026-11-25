@@ -1351,8 +1351,18 @@ private fun Obd2DtcSearchOverlay(
 
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
+      val dtcSearchPillOptions = remember {
+        listOf<DtcSystemFilter?>(null) + DtcSystemFilter.entries
+      }
+
       LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+          .fillMaxSize()
+          .swipeToSwitchPillView(
+            items = dtcSearchPillOptions,
+            selectedItem = selectedCategory,
+            onSelectItem = { onSelectCategory(it) },
+          ),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
@@ -1470,7 +1480,15 @@ private fun Obd2ConnectedDashboardContent(
       }
     }
 
-    Box(modifier = Modifier.weight(1f)) {
+    Box(
+      modifier = Modifier
+        .weight(1f)
+        .swipeToSwitchPillView(
+          items = Obd2ScannerTab.entries,
+          selectedItem = selectedTab,
+          onSelectItem = { onSelectTab(it) },
+        ),
+    ) {
       when (selectedTab) {
         Obd2ScannerTab.LIVE_GAUGES -> Obd2LiveGaugesContent(
           connectedDeviceName = connectedDeviceName,

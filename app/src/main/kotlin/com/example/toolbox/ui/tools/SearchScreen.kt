@@ -419,58 +419,71 @@ fun SearchScreen(
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 
     // Main Content Area
-    if (searchQuery.isBlank()) {
-      SearchDiscoveryHomeView(
-        hiddenTools = hiddenTools,
-        usageCounts = usageCounts,
-        selectedCategoryFilter = selectedCategoryFilter,
-        onRunQuery = { query ->
-          isSearchActive = true
-          searchQuery = query
-        },
-        onOpenTool = { tool ->
-          launchToolFromSearch(tool)
-        },
-      )
-    } else if (results.isEmpty()) {
-      SearchEmptyResultsView(
-        query = searchQuery,
-        hasActiveFilters = selectedCategoryFilter != SearchCategoryFilter.ALL || selectedToolFilter != null,
-        onResetFilters = {
-          selectedCategoryFilter = SearchCategoryFilter.ALL
-          selectedToolFilterName = null
-        },
-      )
-    } else {
-      LazyColumn(
-        modifier = Modifier
-          .fillMaxSize()
-          .testTag("search_results_list"),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        items(results, key = { it.id }) { item ->
-          SearchResultCard(
-            item = item,
-            isHiddenTool = item.resultType == SearchResultType.TOOL && item.tool in hiddenTools,
-            isCopied = copiedItemId == item.id,
-            onCardClick = {
-              if (item.resultType == SearchResultType.TOOL) {
-                launchToolFromSearch(item.tool, item.colorHex)
-              } else {
+    Box(
+      modifier = Modifier
+        .weight(1f)
+        .fillMaxWidth()
+        .swipeToSwitchPillView(
+          items = SearchCategoryFilter.entries,
+          selectedItem = selectedCategoryFilter,
+          onSelectItem = { filter ->
+            selectedCategoryFilter = filter
+          },
+        ),
+    ) {
+      if (searchQuery.isBlank()) {
+        SearchDiscoveryHomeView(
+          hiddenTools = hiddenTools,
+          usageCounts = usageCounts,
+          selectedCategoryFilter = selectedCategoryFilter,
+          onRunQuery = { query ->
+            isSearchActive = true
+            searchQuery = query
+          },
+          onOpenTool = { tool ->
+            launchToolFromSearch(tool)
+          },
+        )
+      } else if (results.isEmpty()) {
+        SearchEmptyResultsView(
+          query = searchQuery,
+          hasActiveFilters = selectedCategoryFilter != SearchCategoryFilter.ALL || selectedToolFilter != null,
+          onResetFilters = {
+            selectedCategoryFilter = SearchCategoryFilter.ALL
+            selectedToolFilterName = null
+          },
+        )
+      } else {
+        LazyColumn(
+          modifier = Modifier
+            .fillMaxSize()
+            .testTag("search_results_list"),
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          items(results, key = { it.id }) { item ->
+            SearchResultCard(
+              item = item,
+              isHiddenTool = item.resultType == SearchResultType.TOOL && item.tool in hiddenTools,
+              isCopied = copiedItemId == item.id,
+              onCardClick = {
+                if (item.resultType == SearchResultType.TOOL) {
+                  launchToolFromSearch(item.tool, item.colorHex)
+                } else {
+                  inspectedResult = item
+                }
+              },
+              onInspectClick = {
                 inspectedResult = item
-              }
-            },
-            onInspectClick = {
-              inspectedResult = item
-            },
-            onOpenToolClick = {
-              launchToolFromSearch(item.tool, item.colorHex)
-            },
-            onCopyClick = { valueToCopy ->
-              copyToClipboard(item.title, valueToCopy, item.id)
-            },
-          )
+              },
+              onOpenToolClick = {
+                launchToolFromSearch(item.tool, item.colorHex)
+              },
+              onCopyClick = { valueToCopy ->
+                copyToClipboard(item.title, valueToCopy, item.id)
+              },
+            )
+          }
         }
       }
     }

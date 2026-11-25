@@ -12,7 +12,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -29,6 +31,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import com.example.toolbox.ui.theme.CircleShape
 import com.example.toolbox.ui.theme.HorizontalHexagonShape
@@ -57,8 +61,10 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,6 +73,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -74,8 +81,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -84,9 +97,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import kotlin.math.abs
 import kotlinx.coroutines.delay
 
 /**
@@ -831,6 +846,7 @@ fun ToolboxPillNavigationBar(
  * (`FontWeight.Bold` when selected, `FontWeight.Medium` when unselected), `16.dp` leading icon size,
  * and `primaryContainer` / `onPrimaryContainer` / `primary` color tokens across all tools.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ToolboxPillNavigationItem(
   selected: Boolean,
@@ -848,6 +864,28 @@ fun ToolboxPillNavigationItem(
   } else {
     RoundedCornerShape(20.dp)
   }
+  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  var pillSize by remember { mutableStateOf(IntSize.Zero) }
+  val density = LocalDensity.current
+  var wasSelected by remember { mutableStateOf(selected) }
+  LaunchedEffect(selected) {
+    if (selected && !wasSelected) {
+      val clearancePx = with(density) { 48.dp.toPx() }
+      val targetRect = if (pillSize.width > 0 && pillSize.height > 0) {
+        Rect(
+          left = -clearancePx,
+          top = 0f,
+          right = pillSize.width.toFloat() + clearancePx,
+          bottom = pillSize.height.toFloat(),
+        )
+      } else {
+        null
+      }
+      bringIntoViewRequester.bringIntoView(targetRect)
+    }
+    wasSelected = selected
+  }
+
   FilterChip(
     selected = selected,
     onClick = onClick,
@@ -882,8 +920,144 @@ fun ToolboxPillNavigationItem(
       selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
       selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
     ),
-    modifier = modifier.then(
-      if (testTag != null) Modifier.testTag(testTag) else Modifier
-    ),
+    modifier = modifier
+      .bringIntoViewRequester(bringIntoViewRequester)
+      .onSizeChanged { pillSize = it }
+      .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
+  )
+}
+
+/**
+ * Horizontal swipe gesture modifier that switches between views or filter categories
+ * controlled by a [ToolboxPillNavigationBar] (`Section 5.4` of `DESIGN_LANGUAGE.md`).
+ *
+ * - Swiping left (finger moving right-to-left) advances to the next pill view ([onSwipeToNext]).
+ * - Swiping right (finger moving left-to-right) returns to the previous pill view ([onSwipeToPrevious]).
+ * - Operates on [PointerEventPass.Main] so child horizontal scrollables, sliders, and drag handles consume
+ *   their own gestures first, while vertical scrolling and multi-touch pinch-to-zoom remain unaffected.
+ */
+@Composable
+fun Modifier.swipeToSwitchPillView(
+  enabled: Boolean = true,
+  canSwipeToPrevious: Boolean = true,
+  canSwipeToNext: Boolean = true,
+  onSwipeToPrevious: () -> Unit,
+  onSwipeToNext: () -> Unit,
+): Modifier {
+  val currentCanSwipeToPrevious by rememberUpdatedState(canSwipeToPrevious)
+  val currentCanSwipeToNext by rememberUpdatedState(canSwipeToNext)
+  val currentOnSwipeToPrevious by rememberUpdatedState(onSwipeToPrevious)
+  val currentOnSwipeToNext by rememberUpdatedState(onSwipeToNext)
+  val density = LocalDensity.current
+
+  return this.pointerInput(enabled) {
+    if (!enabled) return@pointerInput
+    val minLockSlopPx = with(density) { 16.dp.toPx() }
+    val commitDistancePx = with(density) { 52.dp.toPx() }
+
+    awaitEachGesture {
+      val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
+      if (down.isConsumed) return@awaitEachGesture
+
+      val pointerId = down.id
+      val touchSlop = maxOf(viewConfiguration.touchSlop, with(density) { 10.dp.toPx() })
+      val lockSlop = maxOf(touchSlop * 1.15f, minLockSlopPx)
+      var totalDx = 0f
+      var totalDy = 0f
+      var lockedHorizontal = false
+
+      while (true) {
+        val event = awaitPointerEvent(PointerEventPass.Main)
+        val pressedCount = event.changes.count { it.pressed }
+        if (pressedCount > 1) {
+          return@awaitEachGesture
+        }
+
+        val change = event.changes.firstOrNull { it.id == pointerId } ?: return@awaitEachGesture
+        val isUp = change.changedToUpIgnoreConsumed()
+
+        if (!isUp && change.isConsumed) {
+          return@awaitEachGesture
+        }
+
+        val delta = change.positionChange()
+        totalDx += delta.x
+        totalDy += delta.y
+
+        if (!lockedHorizontal) {
+          if (abs(totalDy) > touchSlop && abs(totalDy) >= abs(totalDx) * 0.85f) {
+            return@awaitEachGesture
+          }
+          if (abs(totalDx) > lockSlop && abs(totalDx) > abs(totalDy) * 1.35f) {
+            val swipingNext = totalDx < 0f
+            val swipingPrev = totalDx > 0f
+            if ((swipingNext && !currentCanSwipeToNext) || (swipingPrev && !currentCanSwipeToPrevious)) {
+              return@awaitEachGesture
+            }
+            lockedHorizontal = true
+            change.consume()
+          }
+        } else {
+          change.consume()
+        }
+
+        if (isUp) {
+          if (lockedHorizontal) {
+            if (totalDx <= -commitDistancePx && currentCanSwipeToNext) {
+              currentOnSwipeToNext()
+            } else if (totalDx >= commitDistancePx && currentCanSwipeToPrevious) {
+              currentOnSwipeToPrevious()
+            }
+          }
+          return@awaitEachGesture
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Convenience overload of [swipeToSwitchPillView] that switches horizontally across an ordered list of
+ * pill items ([items]) based on the currently active [selectedItem].
+ */
+@Composable
+fun <T> Modifier.swipeToSwitchPillView(
+  items: List<T>,
+  selectedItem: T,
+  enabled: Boolean = true,
+  performHaptic: Boolean = true,
+  onFallbackSwipeToPrevious: (() -> Unit)? = null,
+  onFallbackSwipeToNext: (() -> Unit)? = null,
+  onSelectItem: (T) -> Unit,
+): Modifier {
+  val haptic = LocalHapticFeedback.current
+  val currentIndex = items.indexOf(selectedItem)
+  val hasPrev = currentIndex > 0
+  val hasNext = currentIndex >= 0 && currentIndex < items.lastIndex
+
+  return this.swipeToSwitchPillView(
+    enabled = enabled && items.size > 1 && currentIndex >= 0,
+    canSwipeToPrevious = hasPrev || onFallbackSwipeToPrevious != null,
+    canSwipeToNext = hasNext || onFallbackSwipeToNext != null,
+    onSwipeToPrevious = {
+      if (hasPrev) {
+        if (performHaptic) {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+        onSelectItem(items[currentIndex - 1])
+      } else {
+        onFallbackSwipeToPrevious?.invoke()
+      }
+    },
+    onSwipeToNext = {
+      if (hasNext) {
+        if (performHaptic) {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+        onSelectItem(items[currentIndex + 1])
+      } else {
+        onFallbackSwipeToNext?.invoke()
+      }
+    },
   )
 }

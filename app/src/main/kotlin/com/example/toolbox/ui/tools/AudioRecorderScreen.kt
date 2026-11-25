@@ -1008,10 +1008,22 @@ fun AudioRecorderScreen(
 
     // 3. Top Section: Recording List View or Scoped Folder Permission Request View (positioned above the recording buttons)
     val folderAwaitingPermission = pendingPermissionFolder?.takeIf { !isFolderGranted(it) }
+    val activeRecorderFolderPill = remember(folderPills, selectedFolder, pendingPermissionFolder) {
+      val target = pendingPermissionFolder ?: selectedFolder
+      folderPills.firstOrNull { it.displayPath.equals(target.displayPath, ignoreCase = true) } ?: selectedFolder
+    }
     Column(
       modifier = Modifier
         .fillMaxWidth()
         .weight(0.54f)
+        .swipeToSwitchPillView(
+          items = folderPills,
+          selectedItem = activeRecorderFolderPill,
+          enabled = !isRecording && folderPills.size > 1,
+          onSelectItem = { folder ->
+            handleFolderPillTap(folder)
+          },
+        )
         .padding(horizontal = 16.dp, vertical = 10.dp)
         .testTag("recordings_section"),
       verticalArrangement = Arrangement.spacedBy(8.dp),

@@ -558,11 +558,23 @@ fun RecipeBookScreen(
                 }
             )
 
+            val recipeCategoryPillOptions = remember {
+                listOf<RecipeCategory?>(null) + RecipeCategory.entries
+            }
+
             // ==================== CONTENT AREA + SEARCH OVERLAY ====================
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
+                    .swipeToSwitchPillView(
+                        items = recipeCategoryPillOptions,
+                        selectedItem = selectedCategory,
+                        enabled = !isSelectionMode,
+                        onSelectItem = { category ->
+                            selectedCategoryName = category?.name
+                        }
+                    )
             ) {
                 // Main Scrollable Tool Content (mirrors PlantScheduleScreen LazyColumn layout)
                 LazyColumn(

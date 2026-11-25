@@ -1099,4 +1099,57 @@ class NotesScreenTest {
       movedIndex > 6,
     )
   }
+
+  @Test
+  fun notesScreen_tappingNearTopOfLongNote_placesCursorWhereTappedWithoutScrollingToBottom() {
+    val longLines = (1..80).joinToString("\n") { index ->
+      "Paragraph line $index with enough descriptive content to fill the editor"
+    }
+    val repo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        NoteItem(
+          id = "long-note-1",
+          title = "Long Research Note",
+          content = longLines,
+          color = NoteColor.SAND,
+        ),
+      ),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        NotesScreen(repository = repo)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Open the long note
+    composeTestRule.onNodeWithTag("note_card_long-note-1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("single_note_view").assertIsDisplayed()
+
+    val titleNode = composeTestRule.onNodeWithTag("editor_title_input")
+    val contentNode = composeTestRule.onNodeWithTag("editor_content_input")
+    val titleTopBefore = titleNode.fetchSemanticsNode().boundsInRoot.top
+
+    // Tap near the top of the long note content
+    contentNode.performTouchInput {
+      click(androidx.compose.ui.geometry.Offset(left + 24f, top + 20f))
+    }
+    composeTestRule.waitForIdle()
+
+    contentNode.assertIsFocused()
+    val selection = contentNode.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.TextSelectionRange]
+    assertTrue(
+      "Expected cursor to be placed near the top where tapped, but was $selection",
+      selection.start < 120 && selection.end < 120,
+    )
+    val titleTopAfter = titleNode.fetchSemanticsNode().boundsInRoot.top
+    assertEquals(
+      "Expected note not to scroll down to the bottom when tapping near the top",
+      titleTopBefore,
+      titleTopAfter,
+      5f,
+    )
+  }
 }

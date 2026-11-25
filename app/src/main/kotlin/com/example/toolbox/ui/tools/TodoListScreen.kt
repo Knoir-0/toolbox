@@ -1774,7 +1774,16 @@ fun TodoListScreen(
         Box(
           modifier = Modifier
             .weight(1f)
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .swipeToSwitchPillView(
+              items = TodoFilterTab.entries,
+              selectedItem = selectedTab,
+              enabled = isTodoFolderGranted && !isSelectionMode && draggedTaskId == null && draggedSubtaskId == null,
+              onSelectItem = { tab ->
+                selectedTab = tab
+                selectedTaskIds = emptySet()
+              },
+            ),
         ) {
           if (!isTodoFolderGranted) {
             if (pendingPermissionFolderPath != null) {

@@ -991,10 +991,21 @@ private fun DndSpellSearchView(
           }
         }
 
+        val spellCategoryPillOptions = remember {
+          listOf<DndSpellCategory?>(null) + DndSpellCategory.entries
+        }
+
         LazyColumn(
           modifier = Modifier
             .fillMaxSize()
             .weight(1f)
+            .swipeToSwitchPillView(
+              items = spellCategoryPillOptions,
+              selectedItem = selectedCategory,
+              onSelectItem = { category ->
+                onSelectCategory(category)
+              },
+            )
             .testTag("spell_search_results_list"),
           contentPadding = PaddingValues(
             start = 16.dp,

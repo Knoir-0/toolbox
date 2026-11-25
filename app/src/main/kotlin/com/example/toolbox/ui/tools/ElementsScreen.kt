@@ -739,7 +739,15 @@ fun ElementsScreen(
         Box(
           modifier = Modifier
             .fillMaxSize()
-            .weight(1f),
+            .weight(1f)
+            .swipeToSwitchPillView(
+              items = ElementsDisplayMode.entries,
+              selectedItem = displayMode,
+              enabled = !isSearchActive,
+              onSelectItem = { mode ->
+                displayMode = mode
+              },
+            ),
         ) {
           AnimatedContent(
             targetState = displayMode,
@@ -1108,7 +1116,10 @@ private fun PeriodicTableInteractiveContent(
               }
             },
           )
-          .horizontalScroll(horizontalScrollState)
+          .horizontalScroll(
+            state = horizontalScrollState,
+            enabled = tableZoom > PeriodicTableEngine.DEFAULT_TABLE_ZOOM + 0.01f,
+          )
           .width(tableWidth)
           .testTag("periodic_table_grid")
           .padding(horizontal = horizontalPadding),

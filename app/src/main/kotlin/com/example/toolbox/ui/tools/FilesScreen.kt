@@ -1241,10 +1241,27 @@ fun FilesScreen(
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
       // 4. File List / Grid or Empty State
+      val activeVolumeForSwipe = remember(storageVolumes, activeVolume, currentDirectory, hasCustomRoot) {
+        if (hasCustomRoot) {
+          storageVolumes.firstOrNull { FileManagerEngine.isAtRootDirectory(currentDirectory, it.file) } ?: activeVolume
+        } else {
+          storageVolumes.firstOrNull { it.id == activeVolume?.id } ?: activeVolume
+        }
+      }
       Box(
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
+          .swipeToSwitchPillView(
+            items = storageVolumes,
+            selectedItem = activeVolumeForSwipe,
+            enabled = !isSelectionMode && storageVolumes.size > 1,
+            onSelectItem = { volume ->
+              if (volume != null) {
+                navigateTo(volume.file)
+              }
+            },
+          )
           .pinchToChangeColumns(
             enabled = true,
             isListView = viewMode == FileViewMode.LIST,

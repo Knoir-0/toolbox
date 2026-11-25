@@ -462,7 +462,15 @@ fun TerminalScreen(
     Box(
       modifier = Modifier
         .weight(1f)
-        .fillMaxWidth(),
+        .fillMaxWidth()
+        .swipeToSwitchPillView(
+          items = TerminalBackendMode.entries,
+          selectedItem = backendMode,
+          enabled = !isSearchActive,
+          onSelectItem = { mode ->
+            controller.selectBackendMode(mode)
+          },
+        ),
     ) {
       // Console Scrollback List
       SelectionContainer(modifier = Modifier.fillMaxSize()) {
@@ -534,7 +542,15 @@ fun TerminalScreen(
             LazyColumn(
               contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
               verticalArrangement = Arrangement.spacedBy(8.dp),
-              modifier = Modifier.fillMaxSize(),
+              modifier = Modifier
+                .fillMaxSize()
+                .swipeToSwitchPillView(
+                  items = TerminalCommandCategory.entries,
+                  selectedItem = selectedCatalogCategory,
+                  onSelectItem = { category ->
+                    selectedCatalogCategory = category
+                  },
+                ),
             ) {
               if (filteredCatalogPresets.isEmpty()) {
                 item {

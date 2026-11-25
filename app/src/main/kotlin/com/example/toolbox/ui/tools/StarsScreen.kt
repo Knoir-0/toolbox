@@ -418,7 +418,18 @@ fun StarsScreen(
       }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .swipeToSwitchPillView(
+          items = StarsTab.entries,
+          selectedItem = selectedTab,
+          enabled = !isSearchActive,
+          onSelectItem = { tab ->
+            selectedTab = tab
+          },
+        ),
+    ) {
       // Main tab content
       AnimatedContent(
         targetState = selectedTab,
@@ -617,7 +628,15 @@ fun StarsScreen(
             }
 
             LazyColumn(
-              modifier = Modifier.fillMaxSize(),
+              modifier = Modifier
+                .fillMaxSize()
+                .swipeToSwitchPillView(
+                  items = StarsGuideCategory.entries,
+                  selectedItem = searchCategory,
+                  onSelectItem = { category ->
+                    searchCategory = category
+                  },
+                ),
               contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
               verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -2570,6 +2589,11 @@ private fun StarsGuideTabContent(
     LazyColumn(
       modifier = Modifier
         .fillMaxSize()
+        .swipeToSwitchPillView(
+          items = StarsGuideCategory.entries,
+          selectedItem = selectedCategory,
+          onSelectItem = { onSelectCategory(it) },
+        )
         .testTag("stars_guide_list"),
       contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),

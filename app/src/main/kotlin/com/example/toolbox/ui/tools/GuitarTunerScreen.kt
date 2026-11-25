@@ -1842,11 +1842,43 @@ private fun TuningCatalogSearchOverlay(
         }
       }
 
+      val tunerSearchPillIndices = remember {
+        (0 until (2 + GuitarTuningCategory.entries.size)).toList()
+      }
+      val activeTunerSearchPillIndex = when {
+        favoritesOnly -> 1
+        selectedCategory != null -> 2 + GuitarTuningCategory.entries.indexOf(selectedCategory)
+        else -> 0
+      }
+
       // Matching Tunings List
       LazyColumn(
         modifier = Modifier
           .fillMaxSize()
           .weight(1f)
+          .swipeToSwitchPillView(
+            items = tunerSearchPillIndices,
+            selectedItem = activeTunerSearchPillIndex,
+            onSelectItem = { idx ->
+              when (idx) {
+                0 -> {
+                  if (favoritesOnly) onToggleFavoritesOnly()
+                  onSelectCategory(null)
+                }
+                1 -> {
+                  if (!favoritesOnly) onToggleFavoritesOnly()
+                  onSelectCategory(null)
+                }
+                else -> {
+                  val cat = GuitarTuningCategory.entries.getOrNull(idx - 2)
+                  if (cat != null) {
+                    if (favoritesOnly) onToggleFavoritesOnly()
+                    onSelectCategory(cat)
+                  }
+                }
+              }
+            },
+          )
           .testTag("catalog_results_section"),
         contentPadding = PaddingValues(
           start = 16.dp,

@@ -1922,6 +1922,42 @@ fun GalleryScreen(
         }
       }
 
+      val isGallerySearchView = isSearchActive && !isSelectionMode
+      val galleryRootPillIndices = remember(folderPills) {
+        (0..folderPills.size).toList()
+      }
+      val activeGalleryRootPillIndex = remember(
+        albumStack.size,
+        pendingPermissionFolder,
+        selectedDefaultFolder,
+        folderPills,
+      ) {
+        if (albumStack.isNotEmpty()) {
+          -1
+        } else if (pendingPermissionFolder != null) {
+          val idx = folderPills.indexOfFirst {
+            it.displayPath.equals(pendingPermissionFolder.displayPath, ignoreCase = true)
+          }
+          if (idx >= 0) idx + 1 else 0
+        } else if (!selectedDefaultFolder.isNullOrBlank()) {
+          val idx = folderPills.indexOfFirst {
+            it.folderName.equals(selectedDefaultFolder, ignoreCase = true) ||
+              it.displayPath.equals(selectedDefaultFolder, ignoreCase = true)
+          }
+          if (idx >= 0) idx + 1 else 0
+        } else {
+          0
+        }
+      }
+      val gallerySearchTagOptions = remember(filteredAutoTags) {
+        listOf<String?>(null) + filteredAutoTags.map { it.first }
+      }
+      val activeGallerySearchTagOption = remember(gallerySearchTagOptions, selectedTagFilter) {
+        gallerySearchTagOptions.firstOrNull { candidate ->
+          candidate != null && selectedTagFilter != null && candidate.equals(selectedTagFilter, ignoreCase = true)
+        }
+      }
+
       // Main Content Area (Tile View with pinch-to-zoom 2..5 per row <-> List View, or Scoped Storage Permission / Locked View)
       PullToRefreshBox(
         isRefreshing = false,
@@ -1933,6 +1969,39 @@ fun GalleryScreen(
           .nestedScroll(pullNestedScrollConnection)
           .testTag("gallery_pull_to_refresh")
           .testTag("gallery_content_container")
+          .then(
+            if (isGallerySearchView) {
+              Modifier.swipeToSwitchPillView(
+                items = gallerySearchTagOptions,
+                selectedItem = activeGallerySearchTagOption,
+                enabled = gallerySearchTagOptions.size > 1,
+                onSelectItem = { tag ->
+                  selectedTagFilter = tag
+                },
+              )
+            } else {
+              Modifier.swipeToSwitchPillView(
+                items = galleryRootPillIndices,
+                selectedItem = activeGalleryRootPillIndex,
+                enabled = !isSelectionMode && albumStack.isEmpty() && galleryRootPillIndices.size > 1,
+                onSelectItem = { pillIdx ->
+                  if (pillIdx <= 0) {
+                    isFabExpanded = false
+                    exitSelectionMode()
+                    navigatedToRootFromInitial = true
+                    pendingPermissionFolderPath = null
+                    selectedDefaultFolder = null
+                    albumStack.clear()
+                  } else {
+                    val folder = folderPills.getOrNull(pillIdx - 1)
+                    if (folder != null) {
+                      handleFolderPillTap(folder)
+                    }
+                  }
+                },
+              )
+            }
+          )
           .pinchToChangeColumns(
             enabled = true,
             isListView = viewMode == GalleryViewMode.LIST,

@@ -1692,11 +1692,41 @@ fun MusicPlayerScreen(
         },
       )
 
+      val musicPillIndices = remember(tabOrder, customFolders) {
+        (0 until (tabOrder.size + customFolders.size)).toList()
+      }
+      val activeMusicPillIndex = remember(tabOrder, selectedTab, customFolders, selectedCustomFolderPath) {
+        val customIdx = if (selectedCustomFolderPath != null) {
+          customFolders.indexOfFirst { it.folderPath.equals(selectedCustomFolderPath, ignoreCase = true) }
+        } else {
+          -1
+        }
+        if (customIdx >= 0) tabOrder.size + customIdx else tabOrder.indexOf(selectedTab)
+      }
+
       // 3. Main Content Area (Scoped Storage Locked/Permission View, Drill-down, Custom Folder, or Selected Tab in List/Card View)
       Box(
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
+          .swipeToSwitchPillView(
+            items = musicPillIndices,
+            selectedItem = activeMusicPillIndex,
+            enabled = isMusicFolderGranted && !isSelectionMode && !hasDrillDown,
+            onSelectItem = { targetIdx ->
+              clearSelection()
+              clearDrillDown()
+              if (targetIdx in tabOrder.indices) {
+                updateTab(tabOrder[targetIdx])
+              } else {
+                val folder = customFolders.getOrNull(targetIdx - tabOrder.size)
+                if (folder != null) {
+                  session.selectCustomFolder(folder)
+                  sectionFocusVersion++
+                }
+              }
+            },
+          )
           .pinchToChangeColumns(
             enabled = isMusicFolderGranted,
             isListView = viewMode == MusicViewMode.LIST,

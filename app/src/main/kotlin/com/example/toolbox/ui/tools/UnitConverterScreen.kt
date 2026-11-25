@@ -447,7 +447,17 @@ fun UnitConverterScreen(
     LazyColumn(
       modifier = Modifier
         .fillMaxWidth()
-        .weight(1f),
+        .weight(1f)
+        .swipeToSwitchPillView(
+          items = UnitCategory.entries,
+          selectedItem = selectedCategory,
+          onSelectItem = { category ->
+            selectedCategory = category
+            val (defFrom, defTo) = UnitCatalog.defaultIndicesFor(category)
+            fromIndex = defFrom
+            toIndex = defTo
+          },
+        ),
       contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
     ) {
     // 1. Hero Conversion Card

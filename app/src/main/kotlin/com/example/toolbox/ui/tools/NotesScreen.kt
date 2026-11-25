@@ -1119,11 +1119,40 @@ fun NotesScreen(
         }
       }
 
+      val pillFilters = remember(allLabels) {
+        buildList {
+          add(NotesFilter.All)
+          allLabels.forEach { add(NotesFilter.Label(it)) }
+          add(NotesFilter.Pinned)
+          add(NotesFilter.Checklists)
+          add(NotesFilter.Archived)
+          add(NotesFilter.Trash)
+        }
+      }
+      val normalizedActiveFilter = remember(pillFilters, activeFilter) {
+        pillFilters.firstOrNull { candidate ->
+          candidate == activeFilter ||
+            (candidate is NotesFilter.Label &&
+              activeFilter is NotesFilter.Label &&
+              candidate.name.equals((activeFilter as NotesFilter.Label).name, ignoreCase = true))
+        } ?: activeFilter
+      }
+
       // 4. Scoped Storage Locked/Permission View or Staggered Grid / List of Notes
       Box(
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
+          .swipeToSwitchPillView(
+            items = pillFilters,
+            selectedItem = normalizedActiveFilter,
+            enabled = isNotesFolderGranted && !isSelectionMode && activeLongPressNoteId == null && draggedNoteId == null,
+            onSelectItem = { filter ->
+              isAddNoteOpen = false
+              selectedNoteIds = emptySet()
+              activeFilter = filter
+            },
+          )
           .pinchToChangeColumns(
             enabled = isNotesFolderGranted,
             isListView = !isGridView,
@@ -3727,22 +3756,51 @@ private fun SingleNoteView(
     val editorScrollState = rememberScrollState()
     var editorViewportCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
+    val currentHandleEmptySpaceTap by rememberUpdatedState(handleEmptySpaceTap)
+    var editorContentCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
     Box(
       modifier = Modifier
         .weight(1f)
         .fillMaxWidth()
         .onGloballyPositioned { editorViewportCoordinates = it }
-        .clickable(
-          interactionSource = remember { MutableInteractionSource() },
-          indication = null,
-          onClick = handleEmptySpaceTap,
-        )
+        .pointerInput(Unit) {
+          val touchSlop = viewConfiguration.touchSlop
+          awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = true)
+            val contentCoords = editorContentCoordinates?.takeIf { it.isAttached }
+            val viewportCoords = editorViewportCoordinates?.takeIf { it.isAttached }
+            if (contentCoords != null && viewportCoords != null) {
+              val contentBottomInViewport = viewportCoords.localBoundingBoxOf(contentCoords, clipBounds = false).bottom
+              if (down.position.y <= contentBottomInViewport) {
+                return@awaitEachGesture
+              }
+            }
+            var isTap = true
+            while (true) {
+              val event = awaitPointerEvent(PointerEventPass.Main)
+              val change = event.changes.firstOrNull { it.id == down.id } ?: break
+              if (change.isConsumed || (change.position - down.position).getDistance() > touchSlop) {
+                isTap = false
+                break
+              }
+              if (change.changedToUpIgnoreConsumed()) {
+                change.consume()
+                break
+              }
+            }
+            if (isTap) {
+              currentHandleEmptySpaceTap()
+            }
+          }
+        }
         .testTag("single_note_editor_empty_space"),
     ) {
       Column(
         modifier = Modifier
           .fillMaxWidth()
           .verticalScroll(editorScrollState)
+          .onGloballyPositioned { editorContentCoordinates = it }
           .padding(
             start = 16.dp,
             end = 16.dp,
@@ -4441,14 +4499,16 @@ private fun NoteEditorContent(
     mutableStateOf(
       TextFieldValue(
         text = draft.content,
-        selection = TextRange(draft.content.length),
+        selection = TextRange.Zero,
       ),
     )
   }
   if (contentFieldValue.text != draft.content) {
+    val start = contentFieldValue.selection.start.coerceIn(0, draft.content.length)
+    val end = contentFieldValue.selection.end.coerceIn(0, draft.content.length)
     contentFieldValue = contentFieldValue.copy(
       text = draft.content,
-      selection = TextRange(draft.content.length),
+      selection = TextRange(start, end),
     )
   }
   val focusContentAtEnd = remember(draft.id, contentFocusRequester, keyboardController) {

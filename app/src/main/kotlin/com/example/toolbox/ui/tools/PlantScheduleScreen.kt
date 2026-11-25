@@ -550,11 +550,23 @@ fun PlantScheduleScreen(
         },
       )
 
+      val plantCategoryPillOptions = remember {
+        listOf<PlantCategory?>(null) + PlantCategory.entries
+      }
+
       // Tool Content Area + Search Catalog Overlay
       Box(
         modifier = Modifier
           .fillMaxSize()
-          .weight(1f),
+          .weight(1f)
+          .swipeToSwitchPillView(
+            items = plantCategoryPillOptions,
+            selectedItem = selectedCategory,
+            enabled = !isSelectionMode,
+            onSelectItem = { category ->
+              selectedCategoryName = category?.name
+            },
+          ),
       ) {
         // Main Scrollable Tool Content
         LazyColumn(
