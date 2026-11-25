@@ -23,6 +23,8 @@ import com.example.toolbox.ui.main.SCREEN_RECORDER_QUICK_ACTION_START_MIC
 import com.example.toolbox.ui.main.EXTRA_AUDIO_RECORDER_QUICK_ACTION
 import com.example.toolbox.ui.main.EXTRA_CALENDAR_DATE_KEY
 import com.example.toolbox.ui.main.EXTRA_CALENDAR_OPEN_ADD_EVENT
+import com.example.toolbox.ui.main.EXTRA_CALENDAR_OPEN_EVENT_ID
+import com.example.toolbox.ui.main.EXTRA_CALENDAR_VIEW_MODE
 import com.example.toolbox.ui.main.EXTRA_CAMERA_CAPTURE_MODE
 import com.example.toolbox.ui.main.EXTRA_ELEMENTS_ATOMIC_NUMBER
 import com.example.toolbox.ui.main.EXTRA_ELEMENTS_OPEN_INSPECTOR
@@ -51,6 +53,7 @@ import com.example.toolbox.ui.main.isSameStandaloneTarget
 import com.example.toolbox.ui.main.parseAudioRecorderQuickAction
 import com.example.toolbox.ui.main.parseCalendarDateKey
 import com.example.toolbox.ui.main.parseCalendarOpenAddEvent
+import com.example.toolbox.ui.main.parseCalendarOpenEventId
 import com.example.toolbox.ui.main.parseCalendarViewModeName
 import com.example.toolbox.ui.main.parseCameraCaptureModeName
 import com.example.toolbox.ui.main.parseElementsAtomicNumber
@@ -121,6 +124,7 @@ class MainActivity : ComponentActivity() {
     cameraCaptureModeName: String? = parseCameraCaptureModeName(intent),
     calendarDateKey: String? = parseCalendarDateKey(intent),
     calendarOpenAddEvent: Boolean = parseCalendarOpenAddEvent(intent),
+    calendarOpenEventId: String? = parseCalendarOpenEventId(intent),
     calendarViewModeName: String? = parseCalendarViewModeName(intent),
     elementsAtomicNumber: Int? = parseElementsAtomicNumber(intent),
     elementsOpenInspector: Boolean = parseElementsOpenInspector(intent),
@@ -190,10 +194,11 @@ class MainActivity : ComponentActivity() {
       CameraWidgets.saveActiveCaptureMode(this, mode)
       CameraEngine.requestCaptureMode(mode)
     }
-    if (calendarDateKey != null || calendarOpenAddEvent || calendarViewModeName != null) {
+    if (calendarDateKey != null || calendarOpenAddEvent || calendarOpenEventId != null || calendarViewModeName != null) {
       CalendarEngine.requestNavigation(
         targetDay = CalendarDay.fromDateKeyOrNull(calendarDateKey),
         openAddEvent = calendarOpenAddEvent,
+        openEventId = calendarOpenEventId,
         viewMode = calendarViewModeName?.let { CalendarViewMode.fromNameOrDefault(it) },
       )
     }
@@ -230,6 +235,7 @@ class MainActivity : ComponentActivity() {
     val cameraCaptureModeName = parseCameraCaptureModeName(intent)
     val calendarDateKey = parseCalendarDateKey(intent)
     val calendarOpenAddEvent = parseCalendarOpenAddEvent(intent)
+    val calendarOpenEventId = parseCalendarOpenEventId(intent)
     val calendarViewModeName = parseCalendarViewModeName(intent)
     val elementsAtomicNumber = parseElementsAtomicNumber(intent)
     val elementsOpenInspector = parseElementsOpenInspector(intent)
@@ -250,7 +256,7 @@ class MainActivity : ComponentActivity() {
       screenRecorderQuickAction != null -> parsedTool ?: Tool.SCREEN_RECORDER
       plantScheduleMonth != null || plantScheduleOpenSearch -> parsedTool ?: Tool.PLANT_SCHEDULE
       cameraCaptureModeName != null -> parsedTool ?: Tool.CAMERA
-      calendarDateKey != null || calendarOpenAddEvent || calendarViewModeName != null -> parsedTool ?: Tool.CALENDAR
+      calendarDateKey != null || calendarOpenAddEvent || calendarOpenEventId != null || calendarViewModeName != null -> parsedTool ?: Tool.CALENDAR
       hasElementsNavigationExtras -> parsedTool ?: Tool.ELEMENTS
       else -> parsedTool
     }
@@ -376,6 +382,7 @@ class MainActivity : ComponentActivity() {
     val cameraCaptureModeName = parseCameraCaptureModeName(intent)
     val calendarDateKey = parseCalendarDateKey(intent)
     val calendarOpenAddEvent = parseCalendarOpenAddEvent(intent)
+    val calendarOpenEventId = parseCalendarOpenEventId(intent)
     val calendarViewModeName = parseCalendarViewModeName(intent)
     val elementsAtomicNumber = parseElementsAtomicNumber(intent)
     val elementsOpenInspector = parseElementsOpenInspector(intent)
@@ -396,7 +403,7 @@ class MainActivity : ComponentActivity() {
       screenRecorderQuickAction != null -> parsedTool ?: Tool.SCREEN_RECORDER
       plantScheduleMonth != null || plantScheduleOpenSearch -> parsedTool ?: Tool.PLANT_SCHEDULE
       cameraCaptureModeName != null -> parsedTool ?: Tool.CAMERA
-      calendarDateKey != null || calendarOpenAddEvent || calendarViewModeName != null -> parsedTool ?: Tool.CALENDAR
+      calendarDateKey != null || calendarOpenAddEvent || calendarOpenEventId != null || calendarViewModeName != null -> parsedTool ?: Tool.CALENDAR
       hasElementsNavigationExtras -> parsedTool ?: Tool.ELEMENTS
       else -> parsedTool
     }
@@ -476,6 +483,12 @@ class MainActivity : ComponentActivity() {
             if (calendarOpenAddEvent) {
               putExtra(EXTRA_CALENDAR_OPEN_ADD_EVENT, true)
             }
+            if (calendarOpenEventId != null) {
+              putExtra(EXTRA_CALENDAR_OPEN_EVENT_ID, calendarOpenEventId)
+            }
+            if (calendarViewModeName != null) {
+              putExtra(EXTRA_CALENDAR_VIEW_MODE, calendarViewModeName)
+            }
             if (elementsAtomicNumber != null) {
               putExtra(EXTRA_ELEMENTS_ATOMIC_NUMBER, elementsAtomicNumber)
             }
@@ -520,7 +533,7 @@ class MainActivity : ComponentActivity() {
     } else if (cameraCaptureModeName != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool ?: Tool.CAMERA
-    } else if (calendarDateKey != null || calendarOpenAddEvent) {
+    } else if (calendarDateKey != null || calendarOpenAddEvent || calendarOpenEventId != null || calendarViewModeName != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool ?: Tool.CALENDAR
     } else if (hasElementsNavigationExtras) {

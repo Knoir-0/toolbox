@@ -536,6 +536,23 @@ data class CalendarEventOccurrence(
   val instanceId: String
     get() = "${event.id}_${occurrenceDay.dateKey}"
 
+  /**
+   * Returns `true` if this occurrence is completely in the past relative to [today] and [nowMillis].
+   * - Any occurrence on a day prior to [today] (`occurrenceDay < today`) is in the past.
+   * - For [today], a timed (non-all-day) occurrence whose [instanceEndMillis] has already elapsed
+   *   (`instanceEndMillis <= nowMillis`, when `nowMillis > 0L`) is in the past; all-day occurrences on
+   *   [today] remain active for the entire day.
+   */
+  fun isPast(
+    today: CalendarDay = CalendarDay.today(),
+    nowMillis: Long = System.currentTimeMillis(),
+  ): Boolean {
+    if (occurrenceDay < today) return true
+    if (occurrenceDay > today) return false
+    if (event.isAllDay) return false
+    return nowMillis > 0L && instanceEndMillis <= nowMillis
+  }
+
   val startHourFraction: Float
     get() {
       val cal = Calendar.getInstance().apply { timeInMillis = instanceStartMillis }
@@ -1037,6 +1054,58 @@ object CalendarEngine {
     return days.associateWith { day ->
       occurrencesForDay(events, day, enabledCategories)
     }
+  }
+
+  /**
+   * Filters [occurrences] to exclude past events relative to [today] and [nowMillis].
+   */
+  fun filterUpcomingOccurrences(
+    occurrences: List<CalendarEventOccurrence>,
+    today: CalendarDay = CalendarDay.today(),
+    nowMillis: Long = System.currentTimeMillis(),
+  ): List<CalendarEventOccurrence> {
+    return occurrences.filterNot { it.isPast(today = today, nowMillis = nowMillis) }
+  }
+
+  /**
+   * Builds the chronological upcoming schedule days and their non-past [CalendarEventOccurrence]s
+   * for the Google Calendar Schedule (Agenda) view and the Calendar Schedule Home Screen AppWidget.
+   *
+   * Never includes days before [today] or timed events on [today] whose end time has already passed.
+   */
+  fun buildUpcomingScheduleDays(
+    events: List<CalendarEvent>,
+    anchorDay: CalendarDay = CalendarDay.today(),
+    today: CalendarDay = CalendarDay.today(),
+    nowMillis: Long = System.currentTimeMillis(),
+    enabledCategories: Set<CalendarCategory> = CalendarCategory.entries.toSet(),
+    horizonDays: Int = 60,
+  ): Map<CalendarDay, List<CalendarEventOccurrence>> {
+    val effectiveStartDay = maxOf(anchorDay, today)
+    val endOfAnchorMonth = CalendarDay(
+      effectiveStartDay.year,
+      effectiveStartDay.month,
+      daysInMonth(effectiveStartDay.year, effectiveStartDay.month),
+    )
+    val horizonEndDay = maxOf(
+      endOfAnchorMonth,
+      effectiveStartDay.plusDays(horizonDays.coerceIn(1, 366) - 1),
+    )
+    val totalDays = (daysBetween(effectiveStartDay, horizonEndDay) + 1).coerceIn(1, 366)
+    val candidateDays = (0 until totalDays).map { offset -> effectiveStartDay.plusDays(offset) }
+
+    val result = LinkedHashMap<CalendarDay, List<CalendarEventOccurrence>>()
+    for (day in candidateDays) {
+      val upcomingForDay = filterUpcomingOccurrences(
+        occurrences = occurrencesForDay(events, day, enabledCategories),
+        today = today,
+        nowMillis = nowMillis,
+      )
+      if (upcomingForDay.isNotEmpty() || day == today || day == effectiveStartDay) {
+        result[day] = upcomingForDay
+      }
+    }
+    return result
   }
 
   /**

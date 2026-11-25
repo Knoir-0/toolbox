@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_calendar_schedule_row_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:baselineAligned="false"
+    android:gravity="top"
+    android:orientation="horizontal">
+
+    <!-- Left Date Column (Google Calendar Schedule style: weekday + circular/hexagonal date badge) -->
+    <LinearLayout
+        android:id="@+id/widget_calendar_schedule_date_column"
+        android:layout_width="44dp"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="10dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp">
+
+        <TextView
+            android:id="@+id/widget_calendar_schedule_day_of_week"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="TUE"
+            android:textColor="#FFCDC4CF"
+            android:textSize="10.5sp"
+            android:textStyle="bold" />
+
+        <FrameLayout
+            android:id="@+id/widget_calendar_schedule_day_badge"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_marginTop="2dp">
+
+            <ImageView
+                android:id="@+id/widget_calendar_schedule_day_badge_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:src="@drawable/bg_music_widget_circle"
+                android:tint="#FF8E66A6" />
+
+            <TextView
+                android:id="@+id/widget_calendar_schedule_day_number"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:text="24"
+                android:textColor="#FFFFFFFF"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+    </LinearLayout>
+
+    <!-- Right Event Card (14.dp rounded Google Calendar Event Card) -->
+    <FrameLayout
+        android:id="@+id/widget_calendar_schedule_card_root"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1">
+
+        <ImageView
+            android:id="@+id/widget_calendar_schedule_card_bg"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/bg_notes_widget_item_fill" />
+
+        <ImageView
+            android:id="@+id/widget_calendar_schedule_card_border"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/bg_notes_widget_item_border" />
+
+        <LinearLayout
+            android:id="@+id/widget_calendar_schedule_card_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:minHeight="48dp"
+            android:orientation="horizontal"
+            android:paddingStart="10dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="8dp">
+
+            <!-- Event Color & Category Badge -->
+            <FrameLayout
+                android:id="@+id/widget_calendar_schedule_event_badge"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:layout_marginEnd="10dp">
+
+                <ImageView
+                    android:id="@+id/widget_calendar_schedule_event_badge_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#FF0C3F5C" />
+
+                <ImageView
+                    android:id="@+id/widget_calendar_schedule_event_badge_border"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_todo_widget_circle_unchecked"
+                    android:tint="#FF039BE5" />
+
+                <ImageView
+                    android:id="@+id/widget_calendar_schedule_event_badge_icon"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:padding="8dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_notification_calendar"
+                    android:tint="#FFB5E3FF" />
+            </FrameLayout>
+
+            <!-- Event Title, Metadata & Description -->
+            <LinearLayout
+                android:id="@+id/widget_calendar_schedule_event_text_container"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/widget_calendar_schedule_event_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Team Design Sync"
+                    android:textColor="#FFE7E1E6"
+                    android:textSize="13.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/widget_calendar_schedule_event_meta"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="1dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="10:00 AM – 11:00 AM • Work"
+                    android:textColor="#FFCDC4CF"
+                    android:textSize="11.5sp" />
+
+                <TextView
+                    android:id="@+id/widget_calendar_schedule_event_desc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="1dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text=""
+                    android:textColor="#CCCDC4CF"
+                    android:textSize="11sp"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- Star Favorite Toggle Button -->
+            <ImageView
+                android:id="@+id/widget_calendar_schedule_event_star"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:layout_marginStart="4dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Star event"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_media_favorite_off"
+                android:tint="#FFCDC4CF" />
+        </LinearLayout>
+    </FrameLayout>
+</LinearLayout>

@@ -59,6 +59,7 @@ const val EXTRA_PLANT_SCHEDULE_OPEN_SEARCH = "extra_plant_schedule_open_search"
 const val EXTRA_CAMERA_CAPTURE_MODE = "extra_camera_capture_mode"
 const val EXTRA_CALENDAR_DATE_KEY = "extra_calendar_date_key"
 const val EXTRA_CALENDAR_OPEN_ADD_EVENT = "extra_calendar_open_add_event"
+const val EXTRA_CALENDAR_OPEN_EVENT_ID = "extra_calendar_open_event_id"
 const val EXTRA_ELEMENTS_ATOMIC_NUMBER = "extra_elements_atomic_number"
 const val EXTRA_ELEMENTS_OPEN_INSPECTOR = "extra_elements_open_inspector"
 const val EXTRA_ELEMENTS_OPEN_SEARCH = "extra_elements_open_search"
@@ -660,6 +661,16 @@ fun parseCalendarOpenAddEvent(intent: Intent?): Boolean {
 }
 
 /**
+ * Parses the requested [com.example.toolbox.ui.tools.CalendarEvent] ID to inspect in [Tool.CALENDAR]
+ * from an incoming [Intent], or `null` if none was specified.
+ */
+fun parseCalendarOpenEventId(intent: Intent?): String? {
+  val fromExtra = intent?.getStringExtra(EXTRA_CALENDAR_OPEN_EVENT_ID)?.trim()?.takeIf { it.isNotEmpty() }
+  if (fromExtra != null) return fromExtra
+  return intent?.data?.getQueryParameter("calendar_event")?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+/**
  * Parses the requested [com.example.toolbox.ui.tools.CalendarViewMode] name (`SCHEDULE`, `MONTH`, `WEEK`, `DAY`)
  * for [Tool.CALENDAR] from an incoming [Intent], or `null` if none was specified.
  */
@@ -671,13 +682,15 @@ fun parseCalendarViewModeName(intent: Intent?): String? {
 
 /**
  * Creates an [Intent] that launches [Tool.CALENDAR] focused on [dateKey] (`yyyy-MM-dd`),
- * optionally switches to [viewModeName], and optionally opens the New Calendar Event dialog ([openAddEvent] = `true`).
+ * optionally switches to [viewModeName], optionally opens [openEventId] in the Event Inspector,
+ * and optionally opens the New Calendar Event dialog ([openAddEvent] = `true`).
  */
 fun createCalendarWidgetIntent(
   context: Context,
   dateKey: String? = null,
   openAddEvent: Boolean = false,
   viewModeName: String? = null,
+  openEventId: String? = null,
 ): Intent {
   return createStandaloneToolIntent(context, Tool.CALENDAR).apply {
     if (!dateKey.isNullOrBlank()) {
@@ -688,6 +701,9 @@ fun createCalendarWidgetIntent(
     }
     if (!viewModeName.isNullOrBlank()) {
       putExtra(EXTRA_CALENDAR_VIEW_MODE, viewModeName)
+    }
+    if (!openEventId.isNullOrBlank()) {
+      putExtra(EXTRA_CALENDAR_OPEN_EVENT_ID, openEventId)
     }
   }
 }

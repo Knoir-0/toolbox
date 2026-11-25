@@ -277,24 +277,53 @@ class CalendarEngineTest {
   fun calendarWidgets_resolvesDailyStateAndStepsDays() {
     CalendarWidgets.clearInMemoryStateForTesting()
     val today = CalendarDay(2026, 11, 23)
-    val event = CalendarEvent(
+    val yesterday = CalendarDay(2026, 11, 22)
+    val tomorrow = CalendarDay(2026, 11, 24)
+    val pastDayEvent = CalendarEvent(
+      id = "w_past_day",
+      title = "Yesterday Dinner",
+      startMillis = yesterday.withTime(19, 0),
+      endMillis = yesterday.withTime(20, 0),
+    )
+    val pastTodayEvent = CalendarEvent(
+      id = "w_past_today",
+      title = "Early Workout",
+      startMillis = today.withTime(6, 0),
+      endMillis = today.withTime(7, 0),
+    )
+    val upcomingTodayEvent = CalendarEvent(
       id = "w_1",
       title = "Morning Coffee",
       startMillis = today.withTime(8, 30),
       endMillis = today.withTime(9, 0),
     )
-    val repo = InMemoryCalendarRepository(initialEvents = listOf(event), initialShowHolidays = false)
+    val tomorrowEvent = CalendarEvent(
+      id = "w_2",
+      title = "Design Sprint",
+      startMillis = tomorrow.withTime(10, 0),
+      endMillis = tomorrow.withTime(11, 0),
+    )
+    val repo = InMemoryCalendarRepository(
+      initialEvents = listOf(pastDayEvent, pastTodayEvent, upcomingTodayEvent, tomorrowEvent),
+      initialShowHolidays = false,
+    )
 
     val state = CalendarWidgets.resolveWidgetState(
       context = null,
       calendarRepository = repo,
       focusedDayOverride = today,
       todayOverride = today,
+      nowMillis = today.withTime(8, 0),
     )
     assertTrue(state.isToday)
     assertEquals("23", state.dayNumberText)
     assertTrue(state.headerTitle.contains("Today"))
     assertTrue(state.agendaSummaryText.contains("Morning Coffee"))
+    assertFalse(state.agendaSummaryText.contains("Yesterday Dinner"))
+    assertFalse(state.agendaSummaryText.contains("Early Workout"))
+    assertEquals(2, state.scheduleItems.size)
+    assertEquals("Morning Coffee", state.scheduleItems[0].occurrence?.event?.title)
+    assertEquals("Design Sprint", state.scheduleItems[1].occurrence?.event?.title)
 
     // Step forward and reset to Today
     CalendarWidgets.saveFocusedDay(null, today)

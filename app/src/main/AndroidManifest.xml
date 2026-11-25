@@ -1027,11 +1027,17 @@
                 <action android:name="com.example.toolbox.calendar.ACTION_WIDGET_PREV_DAY" />
                 <action android:name="com.example.toolbox.calendar.ACTION_WIDGET_NEXT_DAY" />
                 <action android:name="com.example.toolbox.calendar.ACTION_WIDGET_TODAY" />
+                <action android:name="com.example.toolbox.calendar.ACTION_WIDGET_ITEM_CLICK" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/calendar_widget_info" />
         </receiver>
+
+        <service
+            android:name=".ui.tools.CalendarScheduleWidgetRemoteViewsService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
 
         <receiver
             android:name=".ui.tools.CalendarMonthWidgetProvider"

@@ -12,9 +12,15 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.RemoteViews
+import android.widget.RemoteViewsService
 import androidx.compose.runtime.Immutable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import com.example.toolbox.R
 import com.example.toolbox.ui.main.createCalendarWidgetIntent
@@ -25,7 +31,24 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Snapshot of the day's schedule rendered by the Calendar Schedule Home Screen AppWidget ([CalendarWidgetProvider]).
+ * A single row item inside the scrollable [ListView] of the Calendar Schedule Home Screen AppWidget
+ * ([CalendarWidgetProvider]), matching the Google Calendar Schedule (Agenda) view in [CalendarScreen]:
+ * - Left Date Column (weekday + circular/hexagonal date badge, shown on the first item of each day)
+ * - Right 14.dp Event Card (or empty "No events scheduled for Today" card when [occurrence] is `null`)
+ */
+@Immutable
+data class CalendarWidgetScheduleItem(
+  val day: CalendarDay,
+  val isToday: Boolean,
+  val showDateBadge: Boolean,
+  val occurrence: CalendarEventOccurrence?,
+) {
+  val itemId: String
+    get() = occurrence?.instanceId ?: "empty_${day.dateKey}"
+}
+
+/**
+ * Snapshot of the upcoming schedule rendered by the Calendar Schedule Home Screen AppWidget ([CalendarWidgetProvider]).
  */
 @Immutable
 data class CalendarWidgetState(
@@ -33,6 +56,7 @@ data class CalendarWidgetState(
   val today: CalendarDay,
   val isToday: Boolean,
   val occurrences: List<CalendarEventOccurrence>,
+  val scheduleItems: List<CalendarWidgetScheduleItem> = emptyList(),
   val headerTitle: String,
   val headerSubtitle: String,
   val dayNumberText: String,
@@ -85,6 +109,14 @@ object CalendarWidgets {
   const val ACTION_WIDGET_PREV_DAY = "com.example.toolbox.calendar.ACTION_WIDGET_PREV_DAY"
   const val ACTION_WIDGET_NEXT_DAY = "com.example.toolbox.calendar.ACTION_WIDGET_NEXT_DAY"
   const val ACTION_WIDGET_TODAY = "com.example.toolbox.calendar.ACTION_WIDGET_TODAY"
+  const val ACTION_WIDGET_ITEM_CLICK = "com.example.toolbox.calendar.ACTION_WIDGET_ITEM_CLICK"
+
+  const val EXTRA_EVENT_ID = "extra_calendar_widget_event_id"
+  const val EXTRA_DATE_KEY = "extra_calendar_widget_date_key"
+  const val EXTRA_ITEM_CLICK_ACTION = "extra_calendar_widget_item_click_action"
+  const val ITEM_CLICK_ACTION_OPEN_EVENT = "open_event"
+  const val ITEM_CLICK_ACTION_OPEN_DAY = "open_day"
+  const val ITEM_CLICK_ACTION_TOGGLE_FAVORITE = "toggle_favorite"
 
   const val ACTION_MONTH_WIDGET_REFRESH = "com.example.toolbox.calendar.ACTION_MONTH_WIDGET_REFRESH"
   const val ACTION_MONTH_WIDGET_PREV_MONTH = "com.example.toolbox.calendar.ACTION_MONTH_WIDGET_PREV_MONTH"
@@ -100,6 +132,7 @@ object CalendarWidgets {
   private const val REQUEST_CODE_PREV_DAY_BASE = 9800
   private const val REQUEST_CODE_NEXT_DAY_BASE = 9900
   private const val REQUEST_CODE_TODAY_BASE = 9950
+  private const val REQUEST_CODE_ITEM_TEMPLATE_BASE = 10000
 
   private const val REQUEST_CODE_OPEN_MONTH_CALENDAR_BASE = 10100
   private const val REQUEST_CODE_MONTH_ADD_EVENT_BASE = 10200
@@ -277,35 +310,102 @@ object CalendarWidgets {
     return (userEvents + todoEvents + holidayEvents) to enabledCategories
   }
 
+  fun buildScheduleItemMetadata(event: CalendarEvent): String {
+    return buildList {
+      add(CalendarEngine.formatTimeRange(event.startMillis, event.endMillis, event.isAllDay))
+      add(event.category.displayName)
+      if (event.recurrence != CalendarRecurrence.NONE) {
+        add(event.recurrence.shortLabel)
+      }
+      if (event.location.isNotBlank()) {
+        add(event.location)
+      }
+    }.joinToString(" • ")
+  }
+
   fun resolveWidgetState(
     context: Context? = null,
     calendarRepository: CalendarRepository? = context?.let { SharedPreferencesCalendarRepository(it) },
     todoRepository: TodoListRepository? = context?.let { SharedPreferencesTodoListRepository(it) },
     focusedDayOverride: CalendarDay? = null,
     todayOverride: CalendarDay = CalendarDay.today(),
+    nowMillis: Long = 0L,
   ): CalendarWidgetState {
     val today = todayOverride
-    val focusedDay = focusedDayOverride ?: loadFocusedDay(context, defaultDay = today)
+    val rawFocusedDay = focusedDayOverride ?: loadFocusedDay(context, defaultDay = today)
+    // Never focus on a past day in the Schedule widget
+    val focusedDay = maxOf(rawFocusedDay, today)
     val isToday = focusedDay == today
 
+    val yearsToLoad = buildSet {
+      add(focusedDay.year)
+      if (focusedDay.month >= 11) add(focusedDay.year + 1)
+    }
     val (allEvents, enabledCategories) = collectAllEventsForYears(
       calendarRepository = calendarRepository,
       todoRepository = todoRepository,
-      years = setOf(focusedDay.year),
+      years = yearsToLoad,
     )
-    val occurrences = CalendarEngine.occurrencesForDay(
+
+    val upcomingDaysMap = CalendarEngine.buildUpcomingScheduleDays(
       events = allEvents,
-      day = focusedDay,
+      anchorDay = focusedDay,
+      today = today,
+      nowMillis = nowMillis,
       enabledCategories = enabledCategories,
     )
+
+    val focusedDayOccurrences = upcomingDaysMap[focusedDay]
+      ?: CalendarEngine.filterUpcomingOccurrences(
+        occurrences = CalendarEngine.occurrencesForDay(
+          events = allEvents,
+          day = focusedDay,
+          enabledCategories = enabledCategories,
+        ),
+        today = today,
+        nowMillis = nowMillis,
+      )
+    val allUpcomingOccurrences = upcomingDaysMap.values.flatten()
+    val occurrences = if (focusedDayOccurrences.isNotEmpty()) {
+      focusedDayOccurrences
+    } else {
+      allUpcomingOccurrences
+    }
+
+    val scheduleItems = buildList {
+      upcomingDaysMap.forEach { (day, dayOccs) ->
+        val dayIsToday = day == today
+        if (dayOccs.isEmpty()) {
+          add(
+            CalendarWidgetScheduleItem(
+              day = day,
+              isToday = dayIsToday,
+              showDateBadge = true,
+              occurrence = null,
+            )
+          )
+        } else {
+          dayOccs.forEachIndexed { idx, occ ->
+            add(
+              CalendarWidgetScheduleItem(
+                day = day,
+                isToday = dayIsToday,
+                showDateBadge = idx == 0,
+                occurrence = occ,
+              )
+            )
+          }
+        }
+      }
+    }
 
     val headerTitle = if (isToday) {
       "Today • ${focusedDay.monthShortName} ${focusedDay.dayOfMonth}"
     } else {
       "${focusedDay.dayOfWeekShortLabel}, ${focusedDay.monthShortName} ${focusedDay.dayOfMonth}, ${focusedDay.year}"
     }
-    val countLabel = when (val c = occurrences.size) {
-      0 -> "No events"
+    val countLabel = when (val c = allUpcomingOccurrences.size) {
+      0 -> "No upcoming events"
       1 -> "1 event scheduled"
       else -> "$c events scheduled"
     }
@@ -316,6 +416,7 @@ object CalendarWidgets {
       today = today,
       isToday = isToday,
       occurrences = occurrences,
+      scheduleItems = scheduleItems,
       headerTitle = headerTitle,
       headerSubtitle = headerSubtitle,
       dayNumberText = focusedDay.dayOfMonth.toString(),
@@ -610,18 +711,209 @@ object CalendarWidgets {
     action: String,
     requestCodeBase: Int,
     providerClass: Class<*> = CalendarWidgetProvider::class.java,
+    mutable: Boolean = false,
   ): PendingIntent {
     val intent = Intent(context, providerClass).apply {
       this.action = action
       putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
       setPackage(context.packageName)
     }
+    val mutabilityFlag = if (mutable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      PendingIntent.FLAG_MUTABLE
+    } else if (mutable) {
+      0
+    } else {
+      PendingIntent.FLAG_IMMUTABLE
+    }
     return PendingIntent.getBroadcast(
       context,
       requestCodeBase + (appWidgetId and 0xFF),
       intent,
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      PendingIntent.FLAG_UPDATE_CURRENT or mutabilityFlag,
     )
+  }
+
+  /**
+   * Builds the [RemoteViews] for a single row in the Calendar Schedule widget's scrollable [ListView],
+   * matching [GoogleCalendarScheduleAgendaView] and [CalendarEventListCard] in [CalendarScreen].
+   */
+  fun buildScheduleItemRemoteViews(
+    context: Context,
+    item: CalendarWidgetScheduleItem,
+    palette: TodoWidgetPalette = TodoListWidgets.resolveWidgetPalette(context),
+  ): RemoteViews {
+    val views = RemoteViews(context.packageName, R.layout.widget_calendar_schedule_item)
+    val day = item.day
+    val isToday = item.isToday
+
+    // 1. Left Date Column (Weekday + Circular/Hexagonal Date Badge)
+    if (item.showDateBadge) {
+      views.setViewVisibility(R.id.widget_calendar_schedule_date_column, View.VISIBLE)
+      views.setTextViewText(R.id.widget_calendar_schedule_day_of_week, day.dayOfWeekShortLabel.uppercase())
+      views.setTextColor(
+        R.id.widget_calendar_schedule_day_of_week,
+        if (isToday) palette.primaryArgb else palette.onSurfaceVariantArgb,
+      )
+      views.setImageViewResource(
+        R.id.widget_calendar_schedule_day_badge_bg,
+        palette.iconButtonBackgroundRes,
+      )
+      views.setInt(
+        R.id.widget_calendar_schedule_day_badge_bg,
+        "setColorFilter",
+        if (isToday) palette.primaryArgb else palette.itemCardArgb,
+      )
+      views.setTextViewText(R.id.widget_calendar_schedule_day_number, day.dayOfMonth.toString())
+      views.setTextColor(
+        R.id.widget_calendar_schedule_day_number,
+        if (isToday) palette.onPrimaryArgb else palette.onSurfaceArgb,
+      )
+    } else {
+      views.setViewVisibility(R.id.widget_calendar_schedule_date_column, View.INVISIBLE)
+    }
+
+    val openDayFillIn = Intent().apply {
+      putExtra(EXTRA_DATE_KEY, day.dateKey)
+      putExtra(EXTRA_ITEM_CLICK_ACTION, ITEM_CLICK_ACTION_OPEN_DAY)
+    }
+    views.setOnClickFillInIntent(R.id.widget_calendar_schedule_date_column, openDayFillIn)
+    views.setOnClickFillInIntent(R.id.widget_calendar_schedule_day_badge, openDayFillIn)
+
+    // 2. Right Event Card (or Empty Today Card)
+    val occurrence = item.occurrence
+    views.setInt(R.id.widget_calendar_schedule_card_bg, "setColorFilter", palette.itemCardArgb)
+
+    if (occurrence == null) {
+      val defaultBorderArgb = MusicPlayerWidgets.colorToArgb(
+        lerp(
+          Color(palette.itemCardArgb),
+          Color(palette.borderArgb or 0xFF000000.toInt()),
+          0.5f,
+        )
+      )
+      views.setInt(R.id.widget_calendar_schedule_card_border, "setColorFilter", defaultBorderArgb)
+      views.setViewVisibility(R.id.widget_calendar_schedule_event_badge, View.GONE)
+      views.setViewVisibility(R.id.widget_calendar_schedule_event_meta, View.GONE)
+      views.setViewVisibility(R.id.widget_calendar_schedule_event_desc, View.GONE)
+      views.setViewVisibility(R.id.widget_calendar_schedule_event_star, View.GONE)
+
+      val emptyText = if (isToday) "No events scheduled for Today" else "No events scheduled"
+      views.setTextViewText(R.id.widget_calendar_schedule_event_title, emptyText)
+      views.setTextColor(R.id.widget_calendar_schedule_event_title, palette.onSurfaceVariantArgb)
+      views.setInt(R.id.widget_calendar_schedule_event_title, "setPaintFlags", Paint.ANTI_ALIAS_FLAG)
+
+      views.setOnClickFillInIntent(R.id.widget_calendar_schedule_card_root, openDayFillIn)
+      views.setOnClickFillInIntent(R.id.widget_calendar_schedule_card_content, openDayFillIn)
+      views.setOnClickFillInIntent(R.id.widget_calendar_schedule_event_text_container, openDayFillIn)
+      return views
+    }
+
+    val event = occurrence.event
+    val cardBorderArgb = MusicPlayerWidgets.colorToArgb(
+      lerp(
+        Color(palette.itemCardArgb),
+        event.color.accentColor,
+        0.45f,
+      )
+    )
+    views.setInt(R.id.widget_calendar_schedule_card_border, "setColorFilter", cardBorderArgb)
+
+    // Event Color & Category Badge
+    views.setViewVisibility(R.id.widget_calendar_schedule_event_badge, View.VISIBLE)
+    views.setImageViewResource(
+      R.id.widget_calendar_schedule_event_badge_bg,
+      palette.iconButtonBackgroundRes,
+    )
+    views.setInt(
+      R.id.widget_calendar_schedule_event_badge_bg,
+      "setColorFilter",
+      event.color.containerColor(palette.isDarkTheme).toArgb(),
+    )
+    views.setImageViewResource(
+      R.id.widget_calendar_schedule_event_badge_border,
+      palette.taskCheckUncheckedIconRes,
+    )
+    views.setInt(
+      R.id.widget_calendar_schedule_event_badge_border,
+      "setColorFilter",
+      event.color.accentColor.toArgb(),
+    )
+    val categoryIconRes = when (event.category) {
+      CalendarCategory.TASKS -> R.drawable.ic_todo_widget_checklist
+      else -> R.drawable.ic_notification_calendar
+    }
+    views.setImageViewResource(R.id.widget_calendar_schedule_event_badge_icon, categoryIconRes)
+    views.setInt(
+      R.id.widget_calendar_schedule_event_badge_icon,
+      "setColorFilter",
+      event.color.contentColor(palette.isDarkTheme).toArgb(),
+    )
+
+    // Event Title (with strikethrough for completed To Do tasks)
+    views.setTextViewText(R.id.widget_calendar_schedule_event_title, event.title)
+    views.setTextColor(R.id.widget_calendar_schedule_event_title, palette.onSurfaceArgb)
+    val paintFlags = if (event.isCompletedTask) {
+      Paint.ANTI_ALIAS_FLAG or Paint.STRIKE_THRU_TEXT_FLAG
+    } else {
+      Paint.ANTI_ALIAS_FLAG
+    }
+    views.setInt(R.id.widget_calendar_schedule_event_title, "setPaintFlags", paintFlags)
+
+    // Metadata Row (Time • Category • Recurrence • Location)
+    val metaText = buildScheduleItemMetadata(event)
+    views.setViewVisibility(R.id.widget_calendar_schedule_event_meta, View.VISIBLE)
+    views.setTextViewText(R.id.widget_calendar_schedule_event_meta, metaText)
+    views.setTextColor(R.id.widget_calendar_schedule_event_meta, palette.onSurfaceVariantArgb)
+
+    // Optional Description Row
+    if (event.description.isNotBlank()) {
+      views.setViewVisibility(R.id.widget_calendar_schedule_event_desc, View.VISIBLE)
+      views.setTextViewText(
+        R.id.widget_calendar_schedule_event_desc,
+        event.description.replace("\n", " "),
+      )
+      views.setTextColor(
+        R.id.widget_calendar_schedule_event_desc,
+        withAlpha(palette.onSurfaceVariantArgb, 0.8f),
+      )
+    } else {
+      views.setViewVisibility(R.id.widget_calendar_schedule_event_desc, View.GONE)
+    }
+
+    // Star Favorite Toggle Button (for user-created events)
+    if (!event.isReadOnlyBuiltIn) {
+      views.setViewVisibility(R.id.widget_calendar_schedule_event_star, View.VISIBLE)
+      views.setImageViewResource(
+        R.id.widget_calendar_schedule_event_star,
+        if (event.isFavorite) R.drawable.ic_media_favorite_on else R.drawable.ic_media_favorite_off,
+      )
+      views.setInt(
+        R.id.widget_calendar_schedule_event_star,
+        "setColorFilter",
+        if (event.isFavorite) palette.primaryArgb else palette.onSurfaceVariantArgb,
+      )
+      val starFillIn = Intent().apply {
+        putExtra(EXTRA_EVENT_ID, event.id)
+        putExtra(EXTRA_DATE_KEY, day.dateKey)
+        putExtra(EXTRA_ITEM_CLICK_ACTION, ITEM_CLICK_ACTION_TOGGLE_FAVORITE)
+      }
+      views.setOnClickFillInIntent(R.id.widget_calendar_schedule_event_star, starFillIn)
+    } else {
+      views.setViewVisibility(R.id.widget_calendar_schedule_event_star, View.GONE)
+    }
+
+    // Click Event Card -> Opens Calendar in Schedule view and inspects the event
+    val openEventFillIn = Intent().apply {
+      putExtra(EXTRA_EVENT_ID, event.id)
+      putExtra(EXTRA_DATE_KEY, day.dateKey)
+      putExtra(EXTRA_ITEM_CLICK_ACTION, ITEM_CLICK_ACTION_OPEN_EVENT)
+    }
+    views.setOnClickFillInIntent(R.id.widget_calendar_schedule_card_root, openEventFillIn)
+    views.setOnClickFillInIntent(R.id.widget_calendar_schedule_card_content, openEventFillIn)
+    views.setOnClickFillInIntent(R.id.widget_calendar_schedule_event_badge, openEventFillIn)
+    views.setOnClickFillInIntent(R.id.widget_calendar_schedule_event_text_container, openEventFillIn)
+
+    return views
   }
 
   fun buildWidgetRemoteViews(
@@ -642,7 +934,7 @@ object CalendarWidgets {
       context = context,
       options = options,
       defaultWidthDp = 280f,
-      defaultHeightDp = 150f,
+      defaultHeightDp = 180f,
     )
     val rawWidthPx = (widthDp * density).coerceAtLeast(160f)
     val rawHeightPx = (heightDp * density).coerceAtLeast(110f)
@@ -681,32 +973,37 @@ object CalendarWidgets {
     views.setTextViewText(R.id.widget_calendar_subtitle, state.headerSubtitle)
     views.setTextColor(R.id.widget_calendar_subtitle, palette.onSurfaceVariantArgb)
 
-    // Navigation & Add event buttons
-    views.setInt(R.id.widget_calendar_prev_day, "setColorFilter", palette.onSurfaceVariantArgb)
-    views.setInt(R.id.widget_calendar_next_day, "setColorFilter", palette.onSurfaceVariantArgb)
+    // Add event button
     views.setImageViewResource(R.id.widget_calendar_add_button_bg, state.iconButtonBackgroundRes)
     views.setInt(R.id.widget_calendar_add_button_bg, "setColorFilter", palette.primaryContainerArgb)
     views.setInt(R.id.widget_calendar_add_button_icon, "setColorFilter", palette.onPrimaryContainerArgb)
 
-    // Agenda card content
-    val cardWidthPx = (bgWidthPx - (24f * density * scaleFactor)).roundToInt().coerceAtLeast(120)
-    val cardHeightPx = (bgHeightPx - (64f * density * scaleFactor)).roundToInt().coerceAtLeast(70)
-    PlantScheduleWidgets.renderColumnCardBitmap(
-      fillArgb = palette.itemCardArgb,
-      borderArgb = palette.borderArgb,
-      widthPx = cardWidthPx,
-      heightPx = cardHeightPx,
-      cornerRadiusPx = 14f * density * scaleFactor,
-      borderWidthPx = max(1f, 1f * density * scaleFactor),
-    )?.let { cardBmp ->
-      views.setImageViewBitmap(R.id.widget_calendar_agenda_card_bg, cardBmp)
-    }
-
+    // Empty state view styling
+    views.setImageViewResource(R.id.widget_calendar_empty_badge_bg, state.iconButtonBackgroundRes)
+    views.setInt(R.id.widget_calendar_empty_badge_bg, "setColorFilter", palette.primaryContainerArgb)
+    views.setInt(R.id.widget_calendar_empty_badge_icon, "setColorFilter", palette.primaryArgb)
+    views.setTextColor(R.id.widget_calendar_empty_title, palette.onSurfaceArgb)
     views.setTextViewText(R.id.widget_calendar_agenda_list, state.agendaSummaryText)
-    views.setTextColor(
-      R.id.widget_calendar_agenda_list,
-      if (state.occurrences.isEmpty()) palette.onSurfaceVariantArgb else palette.onSurfaceArgb,
+    views.setTextColor(R.id.widget_calendar_agenda_list, palette.onSurfaceVariantArgb)
+
+    // Scrollable Schedule ListView adapter & empty view
+    val serviceIntent = Intent(context, CalendarScheduleWidgetRemoteViewsService::class.java).apply {
+      putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+      data = Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
+    }
+    @Suppress("DEPRECATION")
+    views.setRemoteAdapter(R.id.widget_calendar_schedule_list_view, serviceIntent)
+    views.setEmptyView(R.id.widget_calendar_schedule_list_view, R.id.widget_calendar_empty_view)
+
+    val itemTemplatePendingIntent = buildDayActionBroadcastPendingIntent(
+      context = context,
+      appWidgetId = appWidgetId,
+      action = ACTION_WIDGET_ITEM_CLICK,
+      requestCodeBase = REQUEST_CODE_ITEM_TEMPLATE_BASE,
+      providerClass = CalendarWidgetProvider::class.java,
+      mutable = true,
     )
+    views.setPendingIntentTemplate(R.id.widget_calendar_schedule_list_view, itemTemplatePendingIntent)
 
     // Click PendingIntents (opens Calendar in SCHEDULE view)
     val openDayIntent = buildOpenCalendarPendingIntent(
@@ -725,20 +1022,6 @@ object CalendarWidgets {
       viewMode = CalendarViewMode.SCHEDULE,
       requestCodeBase = REQUEST_CODE_ADD_EVENT_BASE,
     )
-    val prevDayIntent = buildDayActionBroadcastPendingIntent(
-      context = context,
-      appWidgetId = appWidgetId,
-      action = ACTION_WIDGET_PREV_DAY,
-      requestCodeBase = REQUEST_CODE_PREV_DAY_BASE,
-      providerClass = CalendarWidgetProvider::class.java,
-    )
-    val nextDayIntent = buildDayActionBroadcastPendingIntent(
-      context = context,
-      appWidgetId = appWidgetId,
-      action = ACTION_WIDGET_NEXT_DAY,
-      requestCodeBase = REQUEST_CODE_NEXT_DAY_BASE,
-      providerClass = CalendarWidgetProvider::class.java,
-    )
     val todayIntent = buildDayActionBroadcastPendingIntent(
       context = context,
       appWidgetId = appWidgetId,
@@ -749,9 +1032,7 @@ object CalendarWidgets {
 
     views.setOnClickPendingIntent(R.id.widget_calendar_date_badge, todayIntent)
     views.setOnClickPendingIntent(R.id.widget_calendar_header_text_container, openDayIntent)
-    views.setOnClickPendingIntent(R.id.widget_calendar_agenda_card, openDayIntent)
-    views.setOnClickPendingIntent(R.id.widget_calendar_prev_day, prevDayIntent)
-    views.setOnClickPendingIntent(R.id.widget_calendar_next_day, nextDayIntent)
+    views.setOnClickPendingIntent(R.id.widget_calendar_empty_view, openDayIntent)
     views.setOnClickPendingIntent(R.id.widget_calendar_add_button, addEventIntent)
     views.setOnClickPendingIntent(R.id.widget_calendar_add_button_icon, addEventIntent)
 
@@ -890,13 +1171,94 @@ object CalendarWidgets {
   // 6. Action Dispatch & Widget Updates
   // ---------------------------------------------------------------------------
 
+  fun toggleEventFavoriteFromWidget(
+    context: Context?,
+    eventId: String?,
+    calendarRepository: CalendarRepository? = context?.let { SharedPreferencesCalendarRepository(it) },
+  ): Boolean {
+    if (eventId.isNullOrBlank()) return false
+    val repo = calendarRepository ?: return false
+    val currentEvents = repo.loadEvents()
+    val target = currentEvents.firstOrNull { it.id == eventId } ?: return false
+    if (target.isReadOnlyBuiltIn) return false
+    val updated = currentEvents.map { ev ->
+      if (ev.id == eventId) ev.copy(isFavorite = !ev.isFavorite) else ev
+    }
+    repo.saveEvents(updated)
+    if (context != null) {
+      updateAllWidgets(context)
+    }
+    return true
+  }
+
   fun handleWidgetAction(
     context: Context?,
     intent: Intent?,
-  ): Boolean = handleWidgetAction(
-    context = context,
-    action = intent?.action,
-  )
+    calendarRepository: CalendarRepository? = context?.let { SharedPreferencesCalendarRepository(it) },
+  ): Boolean {
+    val action = intent?.action
+    if (action == ACTION_WIDGET_ITEM_CLICK) {
+      val clickAction = intent.getStringExtra(EXTRA_ITEM_CLICK_ACTION) ?: ITEM_CLICK_ACTION_OPEN_DAY
+      val eventId = intent.getStringExtra(EXTRA_EVENT_ID)?.takeIf { it.isNotBlank() }
+      val dateKey = intent.getStringExtra(EXTRA_DATE_KEY)?.takeIf { it.isNotBlank() }
+      val targetDay = CalendarDay.fromDateKeyOrNull(dateKey)
+      return when (clickAction) {
+        ITEM_CLICK_ACTION_TOGGLE_FAVORITE -> {
+          toggleEventFavoriteFromWidget(
+            context = context,
+            eventId = eventId,
+            calendarRepository = calendarRepository,
+          )
+        }
+        ITEM_CLICK_ACTION_OPEN_EVENT -> {
+          CalendarEngine.requestNavigation(
+            targetDay = targetDay,
+            openAddEvent = false,
+            openEventId = eventId,
+            viewMode = CalendarViewMode.SCHEDULE,
+          )
+          if (context != null) {
+            try {
+              context.startActivity(
+                createCalendarWidgetIntent(
+                  context = context,
+                  dateKey = dateKey,
+                  openAddEvent = false,
+                  viewModeName = CalendarViewMode.SCHEDULE.name,
+                  openEventId = eventId,
+                )
+              )
+            } catch (_: Throwable) {}
+          }
+          true
+        }
+        else -> {
+          CalendarEngine.requestNavigation(
+            targetDay = targetDay,
+            openAddEvent = false,
+            viewMode = CalendarViewMode.SCHEDULE,
+          )
+          if (context != null) {
+            try {
+              context.startActivity(
+                createCalendarWidgetIntent(
+                  context = context,
+                  dateKey = dateKey,
+                  openAddEvent = false,
+                  viewModeName = CalendarViewMode.SCHEDULE.name,
+                )
+              )
+            } catch (_: Throwable) {}
+          }
+          true
+        }
+      }
+    }
+    return handleWidgetAction(
+      context = context,
+      action = action,
+    )
+  }
 
   fun handleWidgetAction(
     context: Context?,
@@ -972,7 +1334,7 @@ object CalendarWidgets {
     context: Context,
     appWidgetManager: AppWidgetManager,
     appWidgetIds: IntArray,
-    state: CalendarWidgetState = resolveWidgetState(context),
+    state: CalendarWidgetState = resolveWidgetState(context, nowMillis = System.currentTimeMillis()),
   ) {
     for (appWidgetId in appWidgetIds) {
       try {
@@ -990,6 +1352,10 @@ object CalendarWidgets {
         appWidgetManager.updateAppWidget(appWidgetId, views)
       } catch (_: Throwable) {}
     }
+    try {
+      @Suppress("DEPRECATION")
+      appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetIds, R.id.widget_calendar_schedule_list_view)
+    } catch (_: Throwable) {}
   }
 
   fun updateCalendarMonthWidgets(
@@ -1018,8 +1384,9 @@ object CalendarWidgets {
 }
 
 /**
- * Calendar Schedule Home Screen AppWidget displaying the focused day's Google Calendar schedule,
- * `<` / `>` day stepper, Today badge reset, and `+` quick add event trigger.
+ * Calendar Schedule Home Screen AppWidget displaying the scrollable Google Calendar Schedule view
+ * (left weekday + date badge column and right color-coded 14.dp event cards, excluding past events),
+ * Today badge reset, and `+` quick add event trigger.
  */
 class CalendarWidgetProvider : AppWidgetProvider() {
 
@@ -1041,7 +1408,7 @@ class CalendarWidgetProvider : AppWidgetProvider() {
     appWidgetId: Int,
     newOptions: Bundle,
   ) {
-    val state = CalendarWidgets.resolveWidgetState(context)
+    val state = CalendarWidgets.resolveWidgetState(context, nowMillis = System.currentTimeMillis())
     val views = CalendarWidgets.buildWidgetRemoteViews(
       context = context,
       appWidgetId = appWidgetId,
@@ -1055,6 +1422,71 @@ class CalendarWidgetProvider : AppWidgetProvider() {
     super.onReceive(context, intent)
     CalendarWidgets.handleWidgetAction(context, intent)
   }
+}
+
+/**
+ * [RemoteViewsService] that powers the scrollable Google Calendar Schedule [ListView] inside
+ * [CalendarWidgetProvider].
+ */
+class CalendarScheduleWidgetRemoteViewsService : RemoteViewsService() {
+  override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
+    return CalendarScheduleWidgetRemoteViewsFactory(applicationContext)
+  }
+}
+
+internal class CalendarScheduleWidgetRemoteViewsFactory(
+  private val context: Context,
+) : RemoteViewsService.RemoteViewsFactory {
+
+  private var scheduleItems: List<CalendarWidgetScheduleItem> = emptyList()
+  private var palette: TodoWidgetPalette = TodoListWidgets.resolveWidgetPalette(context)
+
+  override fun onCreate() {
+    reloadSchedule()
+  }
+
+  override fun onDataSetChanged() {
+    reloadSchedule()
+  }
+
+  private fun reloadSchedule() {
+    try {
+      val state = CalendarWidgets.resolveWidgetState(
+        context = context,
+        nowMillis = System.currentTimeMillis(),
+      )
+      scheduleItems = state.scheduleItems
+      palette = state.palette
+    } catch (_: Throwable) {
+      scheduleItems = emptyList()
+    }
+  }
+
+  override fun onDestroy() {
+    scheduleItems = emptyList()
+  }
+
+  override fun getCount(): Int = scheduleItems.size
+
+  override fun getViewAt(position: Int): RemoteViews? {
+    val item = scheduleItems.getOrNull(position) ?: return null
+    return CalendarWidgets.buildScheduleItemRemoteViews(
+      context = context,
+      item = item,
+      palette = palette,
+    )
+  }
+
+  override fun getLoadingView(): RemoteViews? = null
+
+  override fun getViewTypeCount(): Int = 1
+
+  override fun getItemId(position: Int): Long {
+    val itemHash = scheduleItems.getOrNull(position)?.itemId?.hashCode()?.toLong() ?: position.toLong()
+    return (itemHash shl 32) xor (palette.hashCode().toLong() and 0xFFFFFFFFL)
+  }
+
+  override fun hasStableIds(): Boolean = true
 }
 
 /**

@@ -272,7 +272,7 @@ fun CalendarScreen(
       val years = buildSet {
         add(selectedYear)
         if (selectedMonth == 1) add(selectedYear - 1)
-        if (selectedMonth == 12) add(selectedYear + 1)
+        if (selectedMonth >= 11) add(selectedYear + 1)
       }
       years.flatMap { y -> CalendarEngine.builtInHolidaysForYear(y) }
     }
@@ -738,36 +738,6 @@ fun CalendarScreen(
             )
           }
         }
-
-        // Previous period (<)
-        IconButton(
-          onClick = { stepDatePeriod(-1) },
-          modifier = Modifier
-            .size(34.dp)
-            .testTag("calendar_action_prev_period"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.ChevronLeft,
-            contentDescription = "Previous",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-
-        // Next period (>)
-        IconButton(
-          onClick = { stepDatePeriod(1) },
-          modifier = Modifier
-            .size(34.dp)
-            .testTag("calendar_action_next_period"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.ChevronRight,
-            contentDescription = "Next",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-          )
-        }
       },
       searchState = ToolboxTopBarSearchState(
         isActive = isSearchActive,
@@ -916,6 +886,7 @@ fun CalendarScreen(
           GoogleCalendarScheduleAgendaView(
             anchorDay = selectedDay,
             today = today,
+            nowMillis = nowMillis,
             allEvents = allEvents,
             enabledCategories = enabledCategories,
             isDarkTheme = isDarkTheme,
@@ -1876,13 +1847,15 @@ private fun GoogleCalendarTimelineView(
 
 /**
  * Google Calendar-inspired Schedule (Agenda) View:
- * Chronological stream of upcoming days in the active month & horizon with Google Calendar-style
- * left date badge column (weekday + circular date number) and right event cards.
+ * Chronological stream of upcoming days starting from [today] / [anchorDay] (never showing past days
+ * or past events) with Google Calendar-style left date badge column (weekday + circular date number)
+ * and right event cards.
  */
 @Composable
 private fun GoogleCalendarScheduleAgendaView(
   anchorDay: CalendarDay,
   today: CalendarDay,
+  nowMillis: Long,
   allEvents: List<CalendarEvent>,
   enabledCategories: Set<CalendarCategory>,
   isDarkTheme: Boolean,
@@ -1893,17 +1866,17 @@ private fun GoogleCalendarScheduleAgendaView(
   onEventLongClick: (CalendarEvent) -> Unit,
   onToggleFavorite: (CalendarEvent) -> Unit,
 ) {
-  val monthDays = remember(anchorDay.year, anchorDay.month) {
-    val count = CalendarEngine.daysInMonth(anchorDay.year, anchorDay.month)
-    (1..count).map { d -> CalendarDay(anchorDay.year, anchorDay.month, d) }
+  val occurrencesByDay = remember(allEvents, anchorDay, today, nowMillis, enabledCategories) {
+    CalendarEngine.buildUpcomingScheduleDays(
+      events = allEvents,
+      anchorDay = anchorDay,
+      today = today,
+      nowMillis = nowMillis,
+      enabledCategories = enabledCategories,
+    )
   }
-  val occurrencesByDay = remember(allEvents, monthDays, enabledCategories) {
-    CalendarEngine.occurrencesForDays(allEvents, monthDays, enabledCategories)
-  }
-  val activeDaysWithEvents = remember(monthDays, occurrencesByDay, today) {
-    monthDays.filter { day ->
-      occurrencesByDay[day].orEmpty().isNotEmpty() || day == today || day == anchorDay
-    }
+  val activeDaysWithEvents = remember(occurrencesByDay) {
+    occurrencesByDay.keys.toList()
   }
 
   LazyColumn(
