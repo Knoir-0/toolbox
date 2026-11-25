@@ -2284,7 +2284,7 @@ private fun FilesHeader(
               }
               if (singleSelectedFile != null && onOpenSelectedImage != null && FileManagerEngine.isImageFile(singleSelectedFile)) {
                 DropdownMenuItem(
-                  text = { Text("Image") },
+                  text = { Text("Viewer") },
                   leadingIcon = { Icon(Icons.Default.CropOriginal, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
@@ -3394,7 +3394,7 @@ private fun FileActionMenu(
       if (FileManagerEngine.isImageFile(item.file)) {
         Box(modifier = Modifier.testTag("action_preview_image")) {
           DropdownMenuItem(
-            text = { Text("Image") },
+            text = { Text("Viewer") },
             leadingIcon = { Icon(Icons.Default.CropOriginal, contentDescription = null) },
             onClick = onOpenImage,
             modifier = Modifier.testTag("action_open_image"),

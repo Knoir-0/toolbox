@@ -3,6 +3,8 @@ package com.example.toolbox.ui.tools
 import com.example.toolbox.ui.theme.toolboxScreenBackground
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -83,6 +85,7 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -170,7 +173,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -179,6 +185,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -215,7 +222,7 @@ internal val LocalTodoItemActions = compositionLocalOf { TodoItemActionDispatche
 
 private fun formatTodoTaskPlainText(task: TodoItem): String {
   return buildString {
-    appendLine(task.toTtxt())
+    appendLine(task.toText())
     if (task.notes.isNotBlank()) {
       appendLine(task.notes)
     }
@@ -234,13 +241,35 @@ fun TodoListScreen(
   repository: TodoListRepository? = null,
   initialFocusAddTask: Boolean = false,
   initialOpenSchedule: Boolean = false,
+  initialGrantedFolderPaths: Set<String>? = null,
+  onRequestFolderSystemAccess: ((TodoFolder, (Boolean) -> Unit) -> Unit)? = null,
 ) {
   val context = LocalContext.current
+  val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
   val focusManager = LocalFocusManager.current
 
   val repo = remember(repository) {
     repository ?: SharedPreferencesTodoListRepository(context)
+  }
+
+  var grantedFolderPaths by remember(repo, initialGrantedFolderPaths, isInspection) {
+    mutableStateOf(
+      when {
+        initialGrantedFolderPaths != null -> initialGrantedFolderPaths
+        isInspection -> setOf(DEFAULT_TODO_SCOPED_FOLDER.displayPath)
+        else -> repo.getGrantedFolderPaths()
+      }
+    )
+  }
+  val isTodoFolderGranted = remember(grantedFolderPaths) {
+    TodoListEngine.isTodoFolderAccessGranted(grantedFolderPaths)
+  }
+  var pendingPermissionFolderPath by rememberSaveable {
+    mutableStateOf<String?>(null)
+  }
+  var folderAwaitingSystemResult by remember {
+    mutableStateOf<TodoFolder?>(null)
   }
 
   var tasks by remember { mutableStateOf(repo.loadTasks()) }
@@ -253,6 +282,76 @@ fun TodoListScreen(
 
   var savedTasks by remember { mutableStateOf(repo.loadSavedTasks()) }
   var showSavedTasksSheet by remember { mutableStateOf(false) }
+
+  fun grantTodoFolderAccess(folder: TodoFolder = DEFAULT_TODO_SCOPED_FOLDER) {
+    val updated = buildSet {
+      addAll(grantedFolderPaths)
+      add(folder.displayPath)
+      add(DEFAULT_TODO_SCOPED_FOLDER.displayPath)
+    }
+    grantedFolderPaths = updated
+    repo.setGrantedFolderPaths(updated)
+    pendingPermissionFolderPath = null
+    val today = getTodayDateKey()
+    tasks = repo.loadTasks()
+    completedTodayCount = repo.getCompletedTodayCount(today)
+    completedTasks = repo.loadCompletedTasks(today)
+    savedTasks = repo.loadSavedTasks()
+    if (tasks.isNotEmpty() || completedTasks.isNotEmpty()) {
+      repo.saveTasks(tasks)
+      repo.saveCompletedTasks(completedTasks, today)
+    }
+  }
+
+  val folderAccessLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.StartActivityForResult(),
+  ) { result ->
+    val targetFolder = folderAwaitingSystemResult ?: DEFAULT_TODO_SCOPED_FOLDER
+    folderAwaitingSystemResult = null
+    if (result.resultCode == Activity.RESULT_OK) {
+      val treeUri = result.data?.data
+      if (treeUri != null) {
+        try {
+          val takeFlags = (result.data?.flags ?: 0) and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+          context.contentResolver.takePersistableUriPermission(
+            treeUri,
+            if (takeFlags != 0) takeFlags else (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION),
+          )
+        } catch (_: Throwable) {}
+      }
+      grantTodoFolderAccess(targetFolder)
+    }
+  }
+
+  fun requestSystemFolderAccess(folder: TodoFolder = DEFAULT_TODO_SCOPED_FOLDER) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    if (onRequestFolderSystemAccess != null) {
+      onRequestFolderSystemAccess(folder) { granted ->
+        if (granted) {
+          grantTodoFolderAccess(folder)
+        }
+      }
+      return
+    }
+    try {
+      folderAwaitingSystemResult = folder
+      folderAccessLauncher.launch(
+        TodoListEngine.createFolderAccessIntent(
+          context = context,
+          folder = folder,
+        )
+      )
+    } catch (_: Throwable) {
+      folderAwaitingSystemResult = null
+      grantTodoFolderAccess(folder)
+    }
+  }
+
+  fun requestTodoFolderPermissionPrompt() {
+    pendingPermissionFolderPath = DEFAULT_TODO_SCOPED_FOLDER.displayPath
+    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+  }
 
   var isSearchActive by rememberSaveable { mutableStateOf(false) }
   var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -366,7 +465,9 @@ fun TodoListScreen(
     initialFocusAddTask,
     initialOpenSchedule,
     TodoListEngine.pendingQuickActionRequest,
+    isTodoFolderGranted,
   ) {
+    if (!isTodoFolderGranted) return@LaunchedEffect
     val pending = TodoListEngine.consumePendingQuickActionRequest()
     if (pending != null || initialFocusAddTask || initialOpenSchedule) {
       val openSchedule = pending?.openSchedule ?: initialOpenSchedule
@@ -617,15 +718,34 @@ fun TodoListScreen(
   }
 
   fun addSavedTask(savedTask: TodoItem) {
-    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    val freshItem = TodoItem(
-      title = savedTask.title,
-      notes = savedTask.notes,
-      subtasks = savedTask.subtasks.map { TodoSubTask(title = it.title, isCompleted = false) },
-      isSubtasksCollapsed = false,
-    )
-    applyAction(listOf(freshItem) + tasks)
-    scrollTaskListToTop()
+    val shouldSchedule = hasPendingSchedule || (showSchedulePanel && schedulingTaskId == null && !isSchedulingBulk)
+    if (shouldSchedule) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !TodoNotificationHelper.hasNotificationPermission(context)) {
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+      }
+      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+      val startMillis = scheduleStartMillis
+      val recurrence = scheduleRecurrenceRule
+      val freshItem = TodoListEngine.instantiateSavedTask(
+        savedTask = savedTask,
+        scheduledAtMillis = startMillis,
+        scheduledEndMillis = null,
+        recurrenceRule = recurrence,
+      )
+      applyAction(listOf(freshItem) + tasks)
+      scrollTaskListToTop()
+      val label = TodoListEngine.formatScheduleLabel(startMillis, null)
+      val repeatSuffix = recurrence?.let { " (${it.formatLabel()})" } ?: ""
+      Toast.makeText(context, "Scheduled for $label$repeatSuffix", Toast.LENGTH_SHORT).show()
+      scheduleRecurrenceRule = null
+      hasPendingSchedule = false
+      showSchedulePanel = false
+    } else {
+      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+      val freshItem = TodoListEngine.instantiateSavedTask(savedTask)
+      applyAction(listOf(freshItem) + tasks)
+      scrollTaskListToTop()
+    }
   }
 
   fun saveTaskTemplate(task: TodoItem) {
@@ -669,7 +789,7 @@ fun TodoListScreen(
 
   fun promoteSubTask(taskId: String, subtaskId: String) {
     val parentTask = tasks.firstOrNull { it.id == taskId } ?: return
-    val subtask = parentTask.subtasks.firstOrNull { it.id == subtaskId } ?: return
+    val subtask = TodoListEngine.findSubTask(parentTask.subtasks, subtaskId) ?: return
     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     val updated = TodoListEngine.promoteSubTaskToMainTask(tasks, taskId, subtaskId)
     applyAction(updated)
@@ -1106,11 +1226,21 @@ fun TodoListScreen(
   }
 
   val scheduledTasksCount = remember(tasks) { tasks.count { it.isScheduled } }
-  val headerSubtext = remember(selectedTab, mainViewTasks.size, scheduledTasksCount, completedTodayCount) {
-    when (selectedTab) {
-      TodoFilterTab.TASKS -> "${mainViewTasks.size} tasks • $completedTodayCount completed today"
-      TodoFilterTab.SCHEDULED -> "$scheduledTasksCount scheduled • ${mainViewTasks.size} tasks"
-      TodoFilterTab.COMPLETED -> "$completedTodayCount completed today • ${mainViewTasks.size} tasks"
+  val headerSubtext = remember(
+    isTodoFolderGranted,
+    selectedTab,
+    mainViewTasks.size,
+    scheduledTasksCount,
+    completedTodayCount,
+  ) {
+    if (!isTodoFolderGranted) {
+      "Storage access locked • Grant access to /ToDo"
+    } else {
+      when (selectedTab) {
+        TodoFilterTab.TASKS -> "${mainViewTasks.size} tasks • $completedTodayCount completed today"
+        TodoFilterTab.SCHEDULED -> "$scheduledTasksCount scheduled • ${mainViewTasks.size} tasks"
+        TodoFilterTab.COMPLETED -> "$completedTodayCount completed today • ${mainViewTasks.size} tasks"
+      }
     }
   }
 
@@ -1595,20 +1725,33 @@ fun TodoListScreen(
           tasksCount = mainViewTasks.size,
           scheduledCount = scheduledTasksCount,
           completedCount = completedTodayCount,
+          isTodoFolderGranted = isTodoFolderGranted,
+          pendingPermissionFolderPath = pendingPermissionFolderPath,
           onOpenSavedTasks = {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            showSavedTasksSheet = true
+            if (!isTodoFolderGranted) {
+              requestTodoFolderPermissionPrompt()
+            } else {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              showSavedTasksSheet = true
+            }
+          },
+          onRequestTodoFolderPermission = {
+            requestTodoFolderPermissionPrompt()
           },
           onSelectTab = { tab ->
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            selectedTab = tab
-            selectedTaskIds = emptySet()
+            if (!isTodoFolderGranted) {
+              requestTodoFolderPermissionPrompt()
+            } else {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              selectedTab = tab
+              selectedTaskIds = emptySet()
+            }
           },
         )
 
         // 3. In-app Notification Popup Banner when a scheduled note's date/time is reached
         AnimatedVisibility(
-          visible = duePopupTasks.isNotEmpty(),
+          visible = isTodoFolderGranted && duePopupTasks.isNotEmpty(),
           enter = expandVertically() + fadeIn(),
           exit = shrinkVertically() + fadeOut(),
         ) {
@@ -1627,121 +1770,138 @@ fun TodoListScreen(
           }
         }
 
-        // 4. Main Content Area (List)
+        // 4. Main Content Area (Scoped Storage Locked/Permission View or Task List)
         Box(
           modifier = Modifier
             .weight(1f)
             .fillMaxWidth(),
         ) {
-          val hasActiveSearchQuery = isSearchActive && searchQuery.isNotBlank()
-
-          when (selectedTab) {
-            TodoFilterTab.COMPLETED -> {
-              CompletedTasksListContent(
-                completedTasks = filteredCompletedTasks,
-                completedCount = completedTodayCount,
-                hasSearchQuery = hasActiveSearchQuery,
-                isSelectionMode = isSelectionMode,
-                selectedTaskIds = selectedTaskIds,
-                onToggleSelectTask = { taskId -> toggleTaskSelection(taskId) },
-                historyVersion = historyVersion,
-                onUncompleteTask = { task -> uncompleteTask(task) },
-                onRemoveCompletedTask = { task -> deleteCompletedTask(task) },
+          if (!isTodoFolderGranted) {
+            if (pendingPermissionFolderPath != null) {
+              TodoFolderPermissionRequestView(
+                folder = DEFAULT_TODO_SCOPED_FOLDER,
+                onAllowAccess = {
+                  requestSystemFolderAccess(DEFAULT_TODO_SCOPED_FOLDER)
+                },
+              )
+            } else {
+              TodoLockedStorageStateView(
+                onRequestPermission = {
+                  requestTodoFolderPermissionPrompt()
+                },
               )
             }
-            TodoFilterTab.TASKS,
-            TodoFilterTab.SCHEDULED -> {
-              if (activeFilteredTasks.isEmpty()) {
-                when {
-                  hasActiveSearchQuery -> EmptySearchTasksState()
-                  selectedTab == TodoFilterTab.SCHEDULED -> EmptyScheduledTasksState()
-                  else -> EmptyTasksState()
-                }
-              } else {
-                LazyColumn(
-                  state = listState,
-                  modifier = Modifier
-                    .fillMaxSize()
-                    .onGloballyPositioned { taskListCoordinates = it }
-                    .testTag("todo_tasks_list"),
-                  contentPadding = PaddingValues(
-                    start = 12.dp,
-                    end = 12.dp,
-                    top = 8.dp,
-                    bottom = 104.dp,
-                  ),
-                  verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                  items(
-                    items = activeFilteredTasks,
-                    key = { it.id },
-                  ) { task ->
-                    val isBeingDragged = draggedTaskId == task.id
-                    val isEditingInline = inlineEditingTaskId == task.id
-                    SwipeableTaskItem(
-                      task = task,
-                      historyVersion = historyVersion,
-                      isBeingDragged = isBeingDragged,
-                      dragOffsetY = if (isBeingDragged) dragOffsetY else 0f,
-                      isSelected = task.id in selectedTaskIds,
-                      isSelectionMode = isSelectionMode,
-                      isEditingInline = isEditingInline,
-                      onToggleSelection = { toggleTaskSelection(task.id) },
-                      onScheduleClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        openScheduleForTask(task)
-                      },
-                      onComplete = { completeTask(task) },
-                      onDelete = { deleteTask(task) },
-                      onStartInlineEdit = { inlineEditingTaskId = task.id },
-                      onSaveInlineEdit = { newTitle ->
-                        val trimmed = newTitle.trim()
-                        if (trimmed.isNotEmpty() && trimmed != task.title) {
-                          val updated = tasks.map { if (it.id == task.id) it.copy(title = trimmed) else it }
-                          applyAction(updated)
-                        }
-                        inlineEditingTaskId = null
-                      },
-                      onToggleSubTask = { subtaskId -> toggleSubTask(task.id, subtaskId) },
-                      onToggleCollapseSubtasks = { toggleCollapseSubtasks(task.id) },
-                      onSaveAsTemplate = { saveTaskTemplate(task) },
-                      onAddSubTask = { subtaskTitle -> addSubTask(task.id, subtaskTitle) },
-                      onDeleteSubTask = { subtaskId -> deleteSubTask(task.id, subtaskId) },
-                      onPromoteSubTask = { subtaskId -> promoteSubTask(task.id, subtaskId) },
-                      onUpdateSubTask = { subtaskId, newTitle -> updateSubTask(task.id, subtaskId, newTitle) },
-                      draggedSubtaskId = draggedSubtaskId,
-                      subtaskDragOffsetY = subtaskDragOffsetY,
-                      onStartDragSubTask = { subtaskId, startRootY ->
-                        startDraggingSubTask(task.id, subtaskId, startRootY)
-                      },
-                      onDragSubTask = { subtaskId, deltaY, pointerRootY ->
-                        onDragSubTaskDelta(task.id, subtaskId, deltaY, pointerRootY)
-                      },
-                      onEndDragSubTask = { endDraggingSubTask() },
-                      onSubtaskHeightMeasured = { subtaskId, heightPx ->
-                        if (heightPx > 0f) {
-                          subtaskHeightsPx[subtaskId] = heightPx
-                        }
-                      },
-                      onStartDrag = { startRootY -> startDragging(task.id, startRootY) },
-                      onDrag = { deltaY, pointerRootY -> onDragDelta(task.id, deltaY, pointerRootY) },
-                      onEndDrag = { endDragging() },
-                      onItemHeightMeasured = { heightPx ->
-                        if (heightPx > 0f) {
-                          taskHeightsPx[task.id] = heightPx
-                        }
-                      },
-                      modifier = Modifier.animateItem(
-                        placementSpec = if (isBeingDragged) {
-                          null
-                        } else {
-                          spring(
-                            stiffness = Spring.StiffnessMediumLow,
-                            visibilityThreshold = IntOffset.VisibilityThreshold,
-                          )
+          } else {
+            val hasActiveSearchQuery = isSearchActive && searchQuery.isNotBlank()
+
+            when (selectedTab) {
+              TodoFilterTab.COMPLETED -> {
+                CompletedTasksListContent(
+                  completedTasks = filteredCompletedTasks,
+                  completedCount = completedTodayCount,
+                  hasSearchQuery = hasActiveSearchQuery,
+                  isSelectionMode = isSelectionMode,
+                  selectedTaskIds = selectedTaskIds,
+                  onToggleSelectTask = { taskId -> toggleTaskSelection(taskId) },
+                  historyVersion = historyVersion,
+                  onUncompleteTask = { task -> uncompleteTask(task) },
+                  onRemoveCompletedTask = { task -> deleteCompletedTask(task) },
+                )
+              }
+              TodoFilterTab.TASKS,
+              TodoFilterTab.SCHEDULED -> {
+                if (activeFilteredTasks.isEmpty()) {
+                  when {
+                    hasActiveSearchQuery -> EmptySearchTasksState()
+                    selectedTab == TodoFilterTab.SCHEDULED -> EmptyScheduledTasksState()
+                    else -> EmptyTasksState()
+                  }
+                } else {
+                  LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                      .fillMaxSize()
+                      .onGloballyPositioned { taskListCoordinates = it }
+                      .testTag("todo_tasks_list"),
+                    contentPadding = PaddingValues(
+                      start = 12.dp,
+                      end = 12.dp,
+                      top = 8.dp,
+                      bottom = 104.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                  ) {
+                    items(
+                      items = activeFilteredTasks,
+                      key = { it.id },
+                    ) { task ->
+                      val isBeingDragged = draggedTaskId == task.id
+                      val isEditingInline = inlineEditingTaskId == task.id
+                      SwipeableTaskItem(
+                        task = task,
+                        historyVersion = historyVersion,
+                        isBeingDragged = isBeingDragged,
+                        dragOffsetY = if (isBeingDragged) dragOffsetY else 0f,
+                        isSelected = task.id in selectedTaskIds,
+                        isSelectionMode = isSelectionMode,
+                        isEditingInline = isEditingInline,
+                        onToggleSelection = { toggleTaskSelection(task.id) },
+                        onScheduleClick = {
+                          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                          openScheduleForTask(task)
                         },
-                      ),
-                    )
+                        onComplete = { completeTask(task) },
+                        onDelete = { deleteTask(task) },
+                        onStartInlineEdit = { inlineEditingTaskId = task.id },
+                        onSaveInlineEdit = { newTitle ->
+                          val trimmed = newTitle.trim()
+                          if (trimmed.isNotEmpty() && trimmed != task.title) {
+                            val updated = tasks.map { if (it.id == task.id) it.copy(title = trimmed) else it }
+                            applyAction(updated)
+                          }
+                          inlineEditingTaskId = null
+                        },
+                        onToggleSubTask = { subtaskId -> toggleSubTask(task.id, subtaskId) },
+                        onToggleCollapseSubtasks = { toggleCollapseSubtasks(task.id) },
+                        onSaveAsTemplate = { saveTaskTemplate(task) },
+                        onAddSubTask = { subtaskTitle -> addSubTask(task.id, subtaskTitle) },
+                        onDeleteSubTask = { subtaskId -> deleteSubTask(task.id, subtaskId) },
+                        onPromoteSubTask = { subtaskId -> promoteSubTask(task.id, subtaskId) },
+                        onUpdateSubTask = { subtaskId, newTitle -> updateSubTask(task.id, subtaskId, newTitle) },
+                        draggedSubtaskId = draggedSubtaskId,
+                        subtaskDragOffsetY = subtaskDragOffsetY,
+                        onStartDragSubTask = { subtaskId, startRootY ->
+                          startDraggingSubTask(task.id, subtaskId, startRootY)
+                        },
+                        onDragSubTask = { subtaskId, deltaY, pointerRootY ->
+                          onDragSubTaskDelta(task.id, subtaskId, deltaY, pointerRootY)
+                        },
+                        onEndDragSubTask = { endDraggingSubTask() },
+                        onSubtaskHeightMeasured = { subtaskId, heightPx ->
+                          if (heightPx > 0f) {
+                            subtaskHeightsPx[subtaskId] = heightPx
+                          }
+                        },
+                        onStartDrag = { startRootY -> startDragging(task.id, startRootY) },
+                        onDrag = { deltaY, pointerRootY -> onDragDelta(task.id, deltaY, pointerRootY) },
+                        onEndDrag = { endDragging() },
+                        onItemHeightMeasured = { heightPx ->
+                          if (heightPx > 0f) {
+                            taskHeightsPx[task.id] = heightPx
+                          }
+                        },
+                        modifier = Modifier.animateItem(
+                          placementSpec = if (isBeingDragged) {
+                            null
+                          } else {
+                            spring(
+                              stiffness = Spring.StiffnessMediumLow,
+                              visibilityThreshold = IntOffset.VisibilityThreshold,
+                            )
+                          },
+                        ),
+                      )
+                    }
                   }
                 }
               }
@@ -1751,15 +1911,33 @@ fun TodoListScreen(
       }
 
       // 5. Floating 28.dp Pill Quick-Add Bar (styled like NotesQuickCaptureBar)
-      if (!isSelectionMode || isSchedulePanelOpen) {
+      if (isTodoFolderGranted && (!isSelectionMode || isSchedulePanelOpen)) {
         val hexagonEnabled = currentHexagonIconButtons()
-        Box(
+        val savedTaskSuggestions = remember(savedTasks, newTaskTitle, isSelectionMode) {
+          if (isSelectionMode) {
+            emptyList()
+          } else {
+            TodoListEngine.getSavedTaskSuggestions(savedTasks, newTaskTitle)
+          }
+        }
+        Column(
           modifier = Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
             .bringIntoViewRequester(quickAddBringIntoViewRequester)
             .padding(horizontal = 14.dp, vertical = 12.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+          if (savedTaskSuggestions.isNotEmpty()) {
+            SavedTaskSuggestionsList(
+              suggestions = savedTaskSuggestions,
+              onSelectSuggestion = { suggestedTask ->
+                addSavedTask(suggestedTask)
+                newTaskTitle = ""
+              },
+            )
+          }
+
           Surface(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = if (hexagonEnabled && !isSchedulePanelOpen) {
@@ -2803,13 +2981,15 @@ private fun TaskCardContent(
             .padding(start = if (showDragHandle) 18.dp else 12.dp, end = 14.dp, bottom = 10.dp),
           verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          // Subtask items
-          task.subtasks.forEach { subtask ->
+          // Subtask items (including nested subtasks indented by depth)
+          val flattenedSubtasks = remember(task.subtasks) { flattenTodoSubTasks(task.subtasks) }
+          flattenedSubtasks.forEach { (subtask, depth) ->
             key(subtask.id) {
               val isSubtaskBeingDragged = draggedSubtaskId == subtask.id
               Row(
                 modifier = Modifier
                   .fillMaxWidth()
+                  .padding(start = (depth * 18).dp)
                   .height(IntrinsicSize.Min)
                   .heightIn(min = 40.dp)
                   .zIndex(if (isSubtaskBeingDragged) 2f else 0f)
@@ -3354,6 +3534,94 @@ private fun RoundedQuickAddBar(
   }
 }
 
+@Composable
+private fun SavedTaskSuggestionsList(
+  suggestions: List<TodoItem>,
+  onSelectSuggestion: (TodoItem) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  if (suggestions.isEmpty()) return
+  Surface(
+    shape = RoundedCornerShape(16.dp),
+    color = MaterialTheme.colorScheme.surfaceContainer,
+    tonalElevation = 3.dp,
+    shadowElevation = 4.dp,
+    border = BorderStroke(
+      width = 1.dp,
+      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+    ),
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag("todo_saved_suggestions"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(vertical = 4.dp),
+    ) {
+      suggestions.forEach { savedTask ->
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelectSuggestion(savedTask) }
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .testTag("todo_saved_suggestion_${savedTask.id}"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Bookmarks,
+            contentDescription = "Add saved task ${savedTask.title}",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+          )
+          Text(
+            text = savedTask.title,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+          )
+          if (savedTask.subtasks.isNotEmpty()) {
+            Text(
+              text = "${savedTask.subtasks.size} ${if (savedTask.subtasks.size == 1) "subtask" else "subtasks"}",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(16.dp),
+          )
+        }
+      }
+    }
+  }
+}
+
+private data class FlattenedTodoSubTask(
+  val subtask: TodoSubTask,
+  val depth: Int,
+)
+
+private fun flattenTodoSubTasks(
+  subtasks: List<TodoSubTask>,
+  depth: Int = 0,
+): List<FlattenedTodoSubTask> {
+  val result = mutableListOf<FlattenedTodoSubTask>()
+  for (sub in subtasks) {
+    result.add(FlattenedTodoSubTask(sub, depth))
+    if (sub.subtasks.isNotEmpty()) {
+      result.addAll(flattenTodoSubTasks(sub.subtasks, depth + 1))
+    }
+  }
+  return result
+}
+
 /**
  * Pill buttons row for switching between Tasks, Scheduled, and Completed views,
  * with a pinned floating [Saved Tasks] control on the right edge (Section 5.4 of DESIGN_LANGUAGE.md).
@@ -3364,7 +3632,10 @@ private fun TodoFilterPillRow(
   tasksCount: Int,
   scheduledCount: Int,
   completedCount: Int,
+  isTodoFolderGranted: Boolean = true,
+  pendingPermissionFolderPath: String? = null,
   onOpenSavedTasks: () -> Unit = {},
+  onRequestTodoFolderPermission: () -> Unit = {},
   onSelectTab: (TodoFilterTab) -> Unit,
 ) {
   ToolboxPillNavigationBar(
@@ -3372,27 +3643,111 @@ private fun TodoFilterPillRow(
     floatingButtonsCount = 1,
     pills = {
       ToolboxPillNavigationItem(
-        selected = selectedTab == TodoFilterTab.TASKS,
-        onClick = { onSelectTab(TodoFilterTab.TASKS) },
-        leadingIcon = Icons.Default.TaskAlt,
+        selected = if (!isTodoFolderGranted) {
+          pendingPermissionFolderPath != null
+        } else {
+          selectedTab == TodoFilterTab.TASKS
+        },
+        onClick = {
+          if (!isTodoFolderGranted) {
+            onRequestTodoFolderPermission()
+          } else {
+            onSelectTab(TodoFilterTab.TASKS)
+          }
+        },
+        leadingIcon = if (isTodoFolderGranted) Icons.Default.TaskAlt else null,
+        leadingIconContent = if (!isTodoFolderGranted) {
+          {
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier
+                .semantics(mergeDescendants = true) {
+                  onClick {
+                    onRequestTodoFolderPermission()
+                    true
+                  }
+                }
+                .testTag("todo_filter_lock_icon_TASKS"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Lock,
+                contentDescription = "Unlock ToDo folder",
+                modifier = Modifier
+                  .size(16.dp)
+                  .testTag("folder_lock_icon_ToDo"),
+              )
+            }
+          }
+        } else {
+          null
+        },
         label = if (tasksCount == 1) "1 task" else "$tasksCount tasks",
         testTag = "todo_task_count_label",
+        modifier = Modifier.graphicsLayer {
+          alpha = if (!isTodoFolderGranted) 0.72f else 1f
+        },
       )
 
       ToolboxPillNavigationItem(
-        selected = selectedTab == TodoFilterTab.SCHEDULED,
-        onClick = { onSelectTab(TodoFilterTab.SCHEDULED) },
-        leadingIcon = Icons.Default.Schedule,
+        selected = isTodoFolderGranted && selectedTab == TodoFilterTab.SCHEDULED,
+        onClick = {
+          if (!isTodoFolderGranted) {
+            onRequestTodoFolderPermission()
+          } else {
+            onSelectTab(TodoFilterTab.SCHEDULED)
+          }
+        },
+        leadingIconContent = {
+          Icon(
+            imageVector = if (isTodoFolderGranted) Icons.Default.Schedule else Icons.Default.Lock,
+            contentDescription = if (isTodoFolderGranted) "Scheduled" else "Unlock ToDo folder for Scheduled",
+            modifier = Modifier
+              .size(16.dp)
+              .testTag(
+                if (isTodoFolderGranted) {
+                  "todo_filter_unlocked_icon_SCHEDULED"
+                } else {
+                  "todo_filter_lock_icon_SCHEDULED"
+                }
+              ),
+          )
+        },
         label = "$scheduledCount scheduled",
         testTag = "todo_scheduled_count_label",
+        modifier = Modifier.graphicsLayer {
+          alpha = if (!isTodoFolderGranted) 0.72f else 1f
+        },
       )
 
       ToolboxPillNavigationItem(
-        selected = selectedTab == TodoFilterTab.COMPLETED,
-        onClick = { onSelectTab(TodoFilterTab.COMPLETED) },
-        leadingIcon = Icons.Default.CheckCircle,
+        selected = isTodoFolderGranted && selectedTab == TodoFilterTab.COMPLETED,
+        onClick = {
+          if (!isTodoFolderGranted) {
+            onRequestTodoFolderPermission()
+          } else {
+            onSelectTab(TodoFilterTab.COMPLETED)
+          }
+        },
+        leadingIconContent = {
+          Icon(
+            imageVector = if (isTodoFolderGranted) Icons.Default.CheckCircle else Icons.Default.Lock,
+            contentDescription = if (isTodoFolderGranted) "Completed" else "Unlock ToDo folder for Completed",
+            modifier = Modifier
+              .size(16.dp)
+              .testTag(
+                if (isTodoFolderGranted) {
+                  "todo_filter_unlocked_icon_COMPLETED"
+                } else {
+                  "todo_filter_lock_icon_COMPLETED"
+                }
+              ),
+          )
+        },
         label = "$completedCount completed",
         testTag = "todo_completed_today_counter",
+        modifier = Modifier.graphicsLayer {
+          alpha = if (!isTodoFolderGranted) 0.72f else 1f
+        },
       )
     },
     floatingControls = {
@@ -3418,6 +3773,149 @@ private fun TodoFilterPillRow(
       }
     },
   )
+}
+
+/**
+ * View displayed in the To Do tool when scoped storage access is locked (permission to `/ToDo`
+ * has not been granted yet), styled to match the Notes, Gallery, Audio Recorder, and Music Player tools.
+ */
+@Composable
+private fun TodoLockedStorageStateView(
+  onRequestPermission: () -> Unit = {},
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+    modifier = modifier
+      .fillMaxSize()
+      .padding(16.dp)
+      .clip(RoundedCornerShape(14.dp))
+      .clickable(onClick = onRequestPermission)
+      .testTag("locked_storage_state"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(24.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Box(
+        modifier = Modifier
+          .size(48.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Lock,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(24.dp),
+        )
+      }
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text = "Storage access is locked",
+        style = MaterialTheme.typography.bodyLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center,
+      )
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(
+        text = "Tap the lock icon on a navigation pill above to grant permission to access $TODO_LIST_TEXT_FILE_NAME in /ToDo.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+      )
+    }
+  }
+}
+
+/**
+ * View displayed when the user taps a locked navigation pill or its lock icon in the To Do tool,
+ * asking for permission to access `to-do.text` in `/ToDo` and launching the Android system
+ * directory access prompt when the user taps "Allow".
+ */
+@Composable
+private fun TodoFolderPermissionRequestView(
+  folder: TodoFolder,
+  onAllowAccess: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    modifier = modifier
+      .fillMaxSize()
+      .padding(16.dp)
+      .testTag("folder_permission_view"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 24.dp, vertical = 16.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Box(
+        modifier = Modifier
+          .size(48.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Lock,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(24.dp),
+        )
+      }
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text = "Allow access to files in ${folder.folderPath}?",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.testTag("folder_permission_title"),
+      )
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(
+        text = "To Do needs permission to access files in ${folder.folderPath} (${folder.folderName}) to read and save $TODO_LIST_TEXT_FILE_NAME in this location.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.testTag("folder_permission_message"),
+      )
+      Spacer(modifier = Modifier.height(14.dp))
+      Button(
+        onClick = onAllowAccess,
+        shape = CircleShape,
+        modifier = Modifier.testTag("allow_folder_permission_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+          text = "Allow",
+          fontWeight = FontWeight.SemiBold,
+        )
+      }
+    }
+  }
 }
 
 /**

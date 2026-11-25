@@ -29,6 +29,7 @@ import com.example.toolbox.ui.main.EXTRA_ELEMENTS_OPEN_INSPECTOR
 import com.example.toolbox.ui.main.EXTRA_ELEMENTS_OPEN_MOLAR_MASS
 import com.example.toolbox.ui.main.EXTRA_ELEMENTS_OPEN_SEARCH
 import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
+import com.example.toolbox.ui.main.EXTRA_INITIAL_FILE_PATH
 import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_LABEL
 import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_MODE
 import com.example.toolbox.ui.main.EXTRA_NOTES_OPEN_NOTE_ID
@@ -64,6 +65,7 @@ import com.example.toolbox.ui.main.parseScreenRecorderQuickAction
 import com.example.toolbox.ui.main.parseStandaloneTool
 import com.example.toolbox.ui.main.parseTodoQuickActionMode
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
+import com.example.toolbox.ui.main.resolveIncomingIntentFile
 import com.example.toolbox.ui.main.syncPinnedHomeScreenShortcuts
 import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
@@ -75,6 +77,7 @@ import com.example.toolbox.ui.tools.CalendarViewMode
 import com.example.toolbox.ui.tools.CameraCaptureMode
 import com.example.toolbox.ui.tools.CameraEngine
 import com.example.toolbox.ui.tools.CameraWidgets
+import com.example.toolbox.ui.tools.CrossToolActions
 import com.example.toolbox.ui.tools.MusicPlayerEngine
 import com.example.toolbox.ui.tools.NotesEngine
 import com.example.toolbox.ui.tools.NotesFilter
@@ -87,6 +90,7 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
   private val standaloneToolState = mutableStateOf<Tool?>(null)
+  private val initialFileState = mutableStateOf<File?>(null)
   private val initialFolderState = mutableStateOf<String?>(null)
   private val expandMusicPlayerState = mutableStateOf(false)
 
@@ -104,6 +108,8 @@ class MainActivity : ComponentActivity() {
 
   private fun applyIncomingToolActions(
     intent: Intent?,
+    targetTool: Tool? = null,
+    incomingFile: File? = null,
     expandMusicPlayer: Boolean,
     notesQuickCaptureMode: String?,
     todoQuickActionMode: String?,
@@ -127,7 +133,19 @@ class MainActivity : ComponentActivity() {
     val openNoteId = intent?.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID)?.takeIf { it.isNotBlank() }
     val filterLabel = (notesFilter as? NotesFilter.Label)?.name
     val filterPinned = notesFilter == NotesFilter.Pinned
-    if (notesQuickCaptureMode != null) {
+    if (targetTool == Tool.NOTES && incomingFile != null && incomingFile.isFile) {
+      val importedNote = CrossToolActions.saveFileToNotes(
+        context = this,
+        file = incomingFile,
+        showToast = true,
+      )
+      if (importedNote != null) {
+        NotesEngine.requestWidgetNavigation(
+          filter = notesFilter,
+          openNoteId = importedNote.id,
+        )
+      }
+    } else if (notesQuickCaptureMode != null) {
       NotesEngine.requestQuickCapture(
         isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
         initialPinned = filterPinned,
@@ -194,7 +212,13 @@ class MainActivity : ComponentActivity() {
     MusicPlayerEngine.ensureSystemMediaMonitoring(this)
     MusicPlayerEngine.syncExternalSystemMediaSessions(this)
     val parsedTool = parseStandaloneTool(intent)
+    val incomingFile = resolveIncomingIntentFile(this, intent)
     val parsedFolder = parseFolderShortcut(intent)
+      ?: if (parsedTool == Tool.FILES && incomingFile != null) {
+        if (incomingFile.isDirectory) incomingFile.absolutePath else incomingFile.parentFile?.absolutePath
+      } else {
+        null
+      }
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
     val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
     val todoQuickActionMode = parseTodoQuickActionMode(intent)
@@ -229,7 +253,7 @@ class MainActivity : ComponentActivity() {
       hasElementsNavigationExtras -> parsedTool ?: Tool.ELEMENTS
       else -> parsedTool
     }
-    if (resolvedTool != null || parsedFolder != null) {
+    if ((resolvedTool != null || parsedFolder != null) && (incomingFile == null || resolvedTool == Tool.NOTES)) {
       val existingTask = findExistingStandaloneAppTask(
         context = this,
         targetTool = resolvedTool,
@@ -239,6 +263,8 @@ class MainActivity : ComponentActivity() {
       if (existingTask != null) {
         applyIncomingToolActions(
           intent = intent,
+          targetTool = resolvedTool,
+          incomingFile = incomingFile,
           expandMusicPlayer = expandMusicPlayer,
           notesQuickCaptureMode = notesQuickCaptureMode,
           todoQuickActionMode = todoQuickActionMode,
@@ -253,10 +279,13 @@ class MainActivity : ComponentActivity() {
       }
     }
     standaloneToolState.value = resolvedTool
+    initialFileState.value = incomingFile?.takeIf { it.isFile }
     initialFolderState.value = parsedFolder
     expandMusicPlayerState.value = expandMusicPlayer
     applyIncomingToolActions(
       intent = intent,
+      targetTool = resolvedTool,
+      incomingFile = incomingFile,
       expandMusicPlayer = expandMusicPlayer,
       notesQuickCaptureMode = notesQuickCaptureMode,
       todoQuickActionMode = todoQuickActionMode,
@@ -293,6 +322,7 @@ class MainActivity : ComponentActivity() {
       val backgroundTexture by preferencesRepository.backgroundTextureFlow.collectAsState()
       val hexagonIconButtons by preferencesRepository.hexagonIconButtonsFlow.collectAsState()
       val standaloneTool by standaloneToolState
+      val initialFile by initialFileState
       val initialFolder by initialFolderState
       val expandMusicPlayerInitial by expandMusicPlayerState
 
@@ -316,6 +346,7 @@ class MainActivity : ComponentActivity() {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
           MainNavigation(
             standaloneTool = standaloneTool,
+            initialFile = initialFile,
             initialDirectory = initialFolder?.let { File(it) },
             initialExpandMusicPlayer = expandMusicPlayerInitial,
           )
@@ -326,8 +357,14 @@ class MainActivity : ComponentActivity() {
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
-    val parsedFolder = parseFolderShortcut(intent)
     val parsedTool = parseStandaloneTool(intent)
+    val incomingFile = resolveIncomingIntentFile(this, intent)
+    val parsedFolder = parseFolderShortcut(intent)
+      ?: if (parsedTool == Tool.FILES && incomingFile != null) {
+        if (incomingFile.isDirectory) incomingFile.absolutePath else incomingFile.parentFile?.absolutePath
+      } else {
+        null
+      }
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
     val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
     val todoQuickActionMode = parseTodoQuickActionMode(intent)
@@ -372,22 +409,26 @@ class MainActivity : ComponentActivity() {
     ) {
       applyIncomingToolActions(
         intent = intent,
+        targetTool = incomingTool,
+        incomingFile = incomingFile,
         expandMusicPlayer = expandMusicPlayer,
         notesQuickCaptureMode = notesQuickCaptureMode,
         todoQuickActionMode = todoQuickActionMode,
       )
-      val existingTask = findExistingStandaloneAppTask(
-        context = this,
-        targetTool = incomingTool,
-        targetFolder = parsedFolder,
-        excludeTaskId = taskId,
-      )
-      if (existingTask != null) {
-        try {
-          existingTask.moveToFront()
-          return
-        } catch (_: Exception) {
-          // Fall through to startActivity below
+      if (incomingFile == null || incomingTool == Tool.NOTES) {
+        val existingTask = findExistingStandaloneAppTask(
+          context = this,
+          targetTool = incomingTool,
+          targetFolder = parsedFolder,
+          excludeTaskId = taskId,
+        )
+        if (existingTask != null) {
+          try {
+            existingTask.moveToFront()
+            return
+          } catch (_: Exception) {
+            // Fall through to startActivity below
+          }
         }
       }
       try {
@@ -395,6 +436,9 @@ class MainActivity : ComponentActivity() {
           createFolderShortcutIntent(this, File(parsedFolder))
         } else {
           createStandaloneToolIntent(this, incomingTool!!).apply {
+            incomingFile?.takeIf { it.isFile }?.absolutePath?.let {
+              putExtra(EXTRA_INITIAL_FILE_PATH, it)
+            }
             if (expandMusicPlayer) {
               putExtra(EXTRA_EXPAND_MUSIC_PLAYER, true)
             }
@@ -452,6 +496,7 @@ class MainActivity : ComponentActivity() {
       }
     }
     setIntent(intent)
+    initialFileState.value = incomingFile?.takeIf { it.isFile }
     if (parsedFolder != null) {
       initialFolderState.value = parsedFolder
       standaloneToolState.value = parsedTool ?: Tool.FILES
@@ -486,6 +531,8 @@ class MainActivity : ComponentActivity() {
     }
     applyIncomingToolActions(
       intent = intent,
+      targetTool = standaloneToolState.value,
+      incomingFile = incomingFile,
       expandMusicPlayer = expandMusicPlayer,
       notesQuickCaptureMode = notesQuickCaptureMode,
       todoQuickActionMode = todoQuickActionMode,

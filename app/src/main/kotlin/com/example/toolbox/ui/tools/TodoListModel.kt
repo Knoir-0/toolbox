@@ -1,7 +1,12 @@
 package com.example.toolbox.ui.tools
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
+import android.os.Build
+import android.os.storage.StorageManager
+import android.provider.DocumentsContract
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -14,9 +19,30 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-const val TODO_LIST_TTXT_FILE_NAME = "todo_list.text"
-const val TODO_COMPLETED_TTXT_FILE_NAME = "todo_completed.text"
-const val TODO_SAVED_TTXT_FILE_NAME = "todo_saved.text"
+const val TODO_ROOT_FOLDER_NAME = "ToDo"
+const val TODO_ROOT_DISPLAY_PATH = "/ToDo"
+const val TODO_LIST_TEXT_FILE_NAME = "to-do.text"
+const val TODO_COMPLETED_TEXT_FILE_NAME = "todo_completed.text"
+const val TODO_SAVED_TEXT_FILE_NAME = "todo_saved.text"
+private const val TODO_EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY = "com.android.externalstorage.documents"
+
+/**
+ * Represents a scoped storage folder used by the To Do tool (defaulting to `/ToDo` in root storage).
+ */
+data class TodoFolder(
+  val folderName: String = TODO_ROOT_FOLDER_NAME,
+  val displayPath: String = TODO_ROOT_DISPLAY_PATH,
+  val treeUri: String? = null,
+  val customAbsolutePath: String? = null,
+) {
+  val folderPath: String get() = displayPath
+  val pillLabel: String get() = folderName
+}
+
+val DEFAULT_TODO_SCOPED_FOLDER = TodoFolder(
+  folderName = TODO_ROOT_FOLDER_NAME,
+  displayPath = TODO_ROOT_DISPLAY_PATH,
+)
 
 /**
  * Generates a date key formatted as YYYY-MM-DD for midnight reset comparison.
@@ -40,19 +66,19 @@ data class TodoSubTask(
   /**
    * Internal `.text` list marker: `-` when uncompleted, `+` when completed.
    */
-  val ttxtPrefix: Char
+  val textPrefix: Char
     get() = if (isCompleted) '+' else '-'
 
   /**
    * Formats this subtask and any nested [subtasks] into tab-indented `.text` lines.
    * Each level of nesting uses 1 tab (`"\t".repeat(indentLevel)`).
    */
-  fun toTtxt(indentLevel: Int = 1): String {
+  fun toText(indentLevel: Int = 1): String {
     val indent = "\t".repeat(indentLevel.coerceAtLeast(0))
-    val selfLine = "$indent$ttxtPrefix ${title.trim()}"
+    val selfLine = "$indent$textPrefix ${title.trim()}"
     val validChildren = subtasks.filter { it.title.isNotBlank() }
     if (validChildren.isEmpty()) return selfLine
-    val childLines = validChildren.map { it.toTtxt(indentLevel + 1) }
+    val childLines = validChildren.map { it.toText(indentLevel + 1) }
     return (listOf(selfLine) + childLines).joinToString("\n")
   }
 
@@ -65,7 +91,7 @@ data class TodoSubTask(
       subtasks.forEach { childrenArray.put(it.toJson()) }
       put("subtasks", childrenArray)
     }
-    put("ttxt", toTtxt(indentLevel = 1))
+    put("text", toText(indentLevel = 1))
   }
 
   companion object {
@@ -325,8 +351,8 @@ data class TodoItem(
    * - Nested subtasks indented by 1 tab per level (`"\t".repeat(level)`), using `-` for uncompleted
    *   and `+` for completed subtasks.
    */
-  fun toTtxt(isCompleted: Boolean = false): String =
-    TodoListEngine.formatTaskToTtxt(this, isCompleted = isCompleted)
+  fun toText(isCompleted: Boolean = false): String =
+    TodoListEngine.formatTaskToText(this, isCompleted = isCompleted)
 
   fun toJson(): JSONObject = JSONObject().apply {
     put("id", id)
@@ -335,7 +361,7 @@ data class TodoItem(
     val subtasksArray = JSONArray()
     subtasks.forEach { subtasksArray.put(it.toJson()) }
     put("subtasks", subtasksArray)
-    put("ttxt", toTtxt(isCompleted = false))
+    put("text", toText(isCompleted = false))
     put("format", NOTES_FILE_EXTENSION)
     put("isSubtasksCollapsed", isSubtasksCollapsed)
     put("createdAt", createdAt)
@@ -354,12 +380,12 @@ data class TodoItem(
   }
 
   companion object {
-    fun fromTtxt(
-      rawTtxt: String,
+    fun fromText(
+      rawText: String,
       id: String = UUID.randomUUID().toString(),
       nowMs: Long = System.currentTimeMillis(),
-    ): TodoItem = TodoListEngine.parseTaskFromTtxt(
-      rawTtxt = rawTtxt,
+    ): TodoItem = TodoListEngine.parseTaskFromText(
+      rawText = rawText,
       id = id,
       nowMs = nowMs,
     )
@@ -400,9 +426,9 @@ data class TodoItem(
       }
       val id = json.optString("id", UUID.randomUUID().toString())
       val createdAt = json.optLong("createdAt", System.currentTimeMillis())
-      val rawTtxt = json.optString("ttxt", "")
-      if (!json.has("title") && !hasSubtasksKey && rawTtxt.isNotBlank()) {
-        val parsed = fromTtxt(rawTtxt = rawTtxt, id = id, nowMs = createdAt)
+      val rawText = json.optString("text", "")
+      if (!json.has("title") && !hasSubtasksKey && rawText.isNotBlank()) {
+        val parsed = fromText(rawText = rawText, id = id, nowMs = createdAt)
         return parsed.copy(
           notes = json.optString("notes", parsed.notes),
           isSubtasksCollapsed = json.optBoolean("isSubtasksCollapsed", false),
@@ -442,14 +468,15 @@ data class TodoHistorySnapshot(
  * Parsed result of reading a `.text` To Do list document containing active tasks (`- `)
  * and completed tasks (`+ `) with nested YAML subtasks.
  */
-data class ParsedTodoListTtxt(
+data class ParsedTodoListText(
   val title: String = "To Do",
   val tasks: List<TodoItem> = emptyList(),
   val completedTasks: List<TodoItem> = emptyList(),
 )
 
 /**
- * Repository interface for saving and retrieving tasks in `.text` format and the daily completed count.
+ * Repository interface for saving and retrieving tasks in `.text` format in `/ToDo/to-do.text`,
+ * scoped storage folder access state, and the daily completed count.
  */
 interface TodoListRepository {
   fun loadTasks(): List<TodoItem>
@@ -460,17 +487,26 @@ interface TodoListRepository {
   fun saveCompletedTasks(tasks: List<TodoItem>, currentDate: String = getTodayDateKey())
   fun loadSavedTasks(): List<TodoItem>
   fun saveSavedTasks(tasks: List<TodoItem>)
-  fun toTtxt(currentDate: String = getTodayDateKey()): String =
-    TodoListEngine.formatTodoListToTtxt(
+  fun toText(currentDate: String = getTodayDateKey()): String =
+    TodoListEngine.formatTodoListToText(
       tasks = loadTasks(),
       completedTasks = loadCompletedTasks(currentDate),
     )
-  fun getTodoTtxtFile(): File? = null
+  fun isTodoFolderAccessGranted(): Boolean = true
+  fun setTodoFolderAccessGranted(granted: Boolean) {}
+  fun getGrantedFolderPaths(): Set<String> =
+    if (isTodoFolderAccessGranted()) setOf(DEFAULT_TODO_SCOPED_FOLDER.displayPath) else emptySet()
+  fun setGrantedFolderPaths(paths: Set<String>) {
+    setTodoFolderAccessGranted(TodoListEngine.isTodoFolderAccessGranted(paths))
+  }
+  fun getTodoDirectory(): File? = getTodoTextFile()?.parentFile
+  fun getTodoTextFile(): File? = null
 }
 
 /**
  * In-memory repository for unit tests, previews, and isolation.
- * When [todoFile] is provided, the To Do list is also persisted to and loaded from [todoFile] in `.text` format.
+ * When [todoFile] or [todoDirectory] is provided, the whole To Do list is also persisted to
+ * and loaded from `to-do.text` in `.text` format.
  */
 class InMemoryTodoListRepository(
   initialTasks: List<TodoItem> = emptyList(),
@@ -478,18 +514,27 @@ class InMemoryTodoListRepository(
   private var completedCount: Int = 0,
   initialCompletedTasks: List<TodoItem> = emptyList(),
   initialSavedTasks: List<TodoItem> = emptyList(),
-  private val todoFile: File? = null,
+  todoFile: File? = null,
+  private val todoDirectory: File? = null,
+  initialTodoFolderGranted: Boolean = true,
 ) : TodoListRepository {
   private val tasks = initialTasks.toMutableList()
   private val completedTasksList = initialCompletedTasks.toMutableList()
   private val savedTasksList = initialSavedTasks.toMutableList()
+  private var todoFolderGranted = initialTodoFolderGranted
+  private val resolvedTodoFile: File? = when {
+    todoFile != null -> if (todoFile.isDirectory) File(todoFile, TODO_LIST_TEXT_FILE_NAME) else todoFile
+    todoDirectory != null -> File(todoDirectory, TODO_LIST_TEXT_FILE_NAME)
+    else -> null
+  }
 
   init {
-    if (todoFile != null) {
+    val file = resolvedTodoFile
+    if (file != null) {
       if (initialTasks.isNotEmpty() || initialCompletedTasks.isNotEmpty()) {
-        TodoListEngine.saveTodoListToTtxtFile(todoFile, tasks, completedTasksList)
-      } else if (todoFile.exists()) {
-        val parsed = TodoListEngine.loadTodoListFromTtxtFile(todoFile)
+        TodoListEngine.saveTodoListToTextFile(file, tasks, completedTasksList)
+      } else if (file.exists()) {
+        val parsed = TodoListEngine.loadTodoListFromTextFile(file)
         tasks.addAll(parsed.tasks)
         completedTasksList.addAll(parsed.completedTasks)
         if (completedCount == 0 && parsed.completedTasks.isNotEmpty()) {
@@ -500,9 +545,9 @@ class InMemoryTodoListRepository(
   }
 
   override fun loadTasks(): List<TodoItem> {
-    val file = todoFile
+    val file = resolvedTodoFile
     if (file != null && file.exists()) {
-      val parsed = TodoListEngine.loadTodoListFromTtxtFile(
+      val parsed = TodoListEngine.loadTodoListFromTextFile(
         file = file,
         metadataTasks = tasks.toList(),
         metadataCompletedTasks = completedTasksList.toList(),
@@ -516,14 +561,26 @@ class InMemoryTodoListRepository(
   override fun saveTasks(tasks: List<TodoItem>) {
     this.tasks.clear()
     this.tasks.addAll(tasks)
-    val file = todoFile
+    val file = resolvedTodoFile
     if (file != null) {
-      TodoListEngine.saveTodoListToTtxtFile(file, this.tasks, this.completedTasksList)
+      TodoListEngine.saveTodoListToTextFile(file, this.tasks, this.completedTasksList)
     }
   }
 
   override fun getCompletedTodayCount(currentDate: String): Int {
-    return if (completedDate == currentDate) completedCount else 0
+    if (completedDate != currentDate) return 0
+    val file = resolvedTodoFile
+    if (completedCount == 0 && file != null && file.exists()) {
+      val parsed = TodoListEngine.loadTodoListFromTextFile(
+        file = file,
+        metadataTasks = tasks.toList(),
+        metadataCompletedTasks = completedTasksList.toList(),
+      )
+      if (parsed.completedTasks.isNotEmpty()) {
+        completedCount = parsed.completedTasks.size
+      }
+    }
+    return completedCount
   }
 
   override fun setCompletedTodayCount(count: Int, currentDate: String) {
@@ -533,15 +590,18 @@ class InMemoryTodoListRepository(
 
   override fun loadCompletedTasks(currentDate: String): List<TodoItem> {
     if (completedDate != currentDate) return emptyList()
-    val file = todoFile
+    val file = resolvedTodoFile
     if (file != null && file.exists()) {
-      val parsed = TodoListEngine.loadTodoListFromTtxtFile(
+      val parsed = TodoListEngine.loadTodoListFromTextFile(
         file = file,
         metadataTasks = tasks.toList(),
         metadataCompletedTasks = completedTasksList.toList(),
       )
       completedTasksList.clear()
       completedTasksList.addAll(parsed.completedTasks)
+      if (completedCount == 0 && completedTasksList.isNotEmpty()) {
+        completedCount = completedTasksList.size
+      }
     }
     return completedTasksList.toList()
   }
@@ -550,9 +610,9 @@ class InMemoryTodoListRepository(
     completedDate = currentDate
     completedTasksList.clear()
     completedTasksList.addAll(tasks)
-    val file = todoFile
+    val file = resolvedTodoFile
     if (file != null) {
-      TodoListEngine.saveTodoListToTtxtFile(file, this.tasks, this.completedTasksList)
+      TodoListEngine.saveTodoListToTextFile(file, this.tasks, this.completedTasksList)
     }
   }
 
@@ -565,39 +625,58 @@ class InMemoryTodoListRepository(
     savedTasksList.addAll(tasks)
   }
 
-  override fun getTodoTtxtFile(): File? = todoFile
+  override fun isTodoFolderAccessGranted(): Boolean = todoFolderGranted
+
+  override fun setTodoFolderAccessGranted(granted: Boolean) {
+    todoFolderGranted = granted
+  }
+
+  override fun getTodoDirectory(): File? = todoDirectory ?: resolvedTodoFile?.parentFile
+
+  override fun getTodoTextFile(): File? = resolvedTodoFile
 }
 
 /**
- * Android [SharedPreferences] and `.text` file-backed repository for the To Do List tool.
+ * Android [SharedPreferences] and `/ToDo/to-do.text` file-backed repository for the To Do List tool.
  */
 class SharedPreferencesTodoListRepository(
   private val sharedPreferences: SharedPreferences,
-  private val todoFile: File? = null,
-  private val hasExplicitTodoFile: Boolean = todoFile != null,
+  todoFile: File? = null,
+  private val todoDirectory: File? = null,
+  private val hasExplicitTodoFile: Boolean = todoFile != null || todoDirectory != null,
 ) : TodoListRepository {
+
+  private val resolvedTodoFile: File? = when {
+    todoFile != null -> if (todoFile.isDirectory) File(todoFile, TODO_LIST_TEXT_FILE_NAME) else todoFile
+    todoDirectory != null -> File(todoDirectory, TODO_LIST_TEXT_FILE_NAME)
+    else -> null
+  }
 
   companion object {
     const val PREFS_NAME = "todo_list_preferences"
     const val KEY_TASKS_JSON = "tasks_json"
-    const val KEY_TASKS_TTXT = "tasks_ttxt"
+    const val KEY_TASKS_TEXT = "tasks_text"
     const val KEY_COMPLETED_TODAY_DATE = "completed_today_date"
     const val KEY_COMPLETED_TODAY_COUNT = "completed_today_count"
     const val KEY_COMPLETED_TASKS_JSON = "completed_tasks_json"
-    const val KEY_COMPLETED_TASKS_TTXT = "completed_tasks_ttxt"
+    const val KEY_COMPLETED_TASKS_TEXT = "completed_tasks_text"
     const val KEY_SAVED_TASKS_JSON = "saved_tasks_json"
-    const val KEY_SAVED_TASKS_TTXT = "saved_tasks_ttxt"
+    const val KEY_SAVED_TASKS_TEXT = "saved_tasks_text"
+    const val KEY_TODO_FOLDER_GRANTED = "todo_folder_granted"
+    const val KEY_GRANTED_FOLDER_PATHS = "todo_granted_folder_paths"
   }
 
   constructor(context: Context) : this(
     sharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
-    todoFile = TodoListEngine.getDefaultTodoTtxtFile(context),
+    todoFile = TodoListEngine.getDefaultTodoTextFile(context),
+    todoDirectory = TodoListEngine.getDefaultTodoDirectory(context),
     hasExplicitTodoFile = false,
   )
 
   constructor(context: Context, todoFile: File) : this(
     sharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
-    todoFile = todoFile,
+    todoFile = if (todoFile.isDirectory) File(todoFile, TODO_LIST_TEXT_FILE_NAME) else todoFile,
+    todoDirectory = if (todoFile.isDirectory) todoFile else todoFile.parentFile,
     hasExplicitTodoFile = true,
   )
 
@@ -620,13 +699,15 @@ class SharedPreferencesTodoListRepository(
 
   override fun loadTasks(): List<TodoItem> {
     val jsonString = sharedPreferences.getString(KEY_TASKS_JSON, null)
-    val ttxtString = sharedPreferences.getString(KEY_TASKS_TTXT, null)
-    val file = todoFile
+    val textString = sharedPreferences.getString(KEY_TASKS_TEXT, null)
+    val file = resolvedTodoFile
 
-    if (jsonString == null && ttxtString == null) {
+    if (jsonString == null && textString == null) {
       if (file != null) {
-        if (hasExplicitTodoFile && file.exists()) {
-          return TodoListEngine.loadTodoListFromTtxtFile(file).tasks
+        if (hasExplicitTodoFile || isTodoFolderAccessGranted()) {
+          if (file.exists()) {
+            return TodoListEngine.loadTodoListFromTextFile(file).tasks
+          }
         } else if (!hasExplicitTodoFile && file.exists()) {
           try {
             file.delete()
@@ -637,22 +718,31 @@ class SharedPreferencesTodoListRepository(
     }
 
     val metadataTasks = parseTasksJson(jsonString)
-    if (hasExplicitTodoFile && file != null && file.exists()) {
-      return TodoListEngine.loadTodoListFromTtxtFile(
-        file = file,
-        metadataTasks = metadataTasks,
-      ).tasks
+    val metadataCompleted = parseTasksJson(sharedPreferences.getString(KEY_COMPLETED_TASKS_JSON, null))
+    if (file != null && (hasExplicitTodoFile || isTodoFolderAccessGranted())) {
+      try {
+        if (file.exists()) {
+          return TodoListEngine.loadTodoListFromTextFile(
+            file = file,
+            metadataTasks = metadataTasks,
+            metadataCompletedTasks = metadataCompleted,
+          ).tasks
+        } else if (metadataTasks.isNotEmpty() || metadataCompleted.isNotEmpty()) {
+          TodoListEngine.saveTodoListToTextFile(file, metadataTasks, metadataCompleted)
+          return metadataTasks
+        }
+      } catch (_: Throwable) {}
     }
 
-    if (!ttxtString.isNullOrBlank()) {
-      val parsed = TodoListEngine.parseTodoListFromTtxt(
-        rawTtxt = ttxtString,
+    if (!textString.isNullOrBlank()) {
+      val parsed = TodoListEngine.parseTodoListFromText(
+        rawText = textString,
         metadataTasks = metadataTasks,
       )
       if (parsed.tasks.isNotEmpty() || metadataTasks.isEmpty()) {
         if (file != null && !file.exists() && parsed.tasks.isNotEmpty()) {
           try {
-            TodoListEngine.saveTodoListToTtxtFile(file, parsed.tasks, emptyList())
+            TodoListEngine.saveTodoListToTextFile(file, parsed.tasks, metadataCompleted)
           } catch (_: Throwable) {}
         }
         return parsed.tasks
@@ -661,7 +751,7 @@ class SharedPreferencesTodoListRepository(
 
     if (file != null && !file.exists() && metadataTasks.isNotEmpty()) {
       try {
-        TodoListEngine.saveTodoListToTtxtFile(file, metadataTasks, emptyList())
+        TodoListEngine.saveTodoListToTextFile(file, metadataTasks, metadataCompleted)
       } catch (_: Throwable) {}
     }
     return metadataTasks
@@ -670,27 +760,30 @@ class SharedPreferencesTodoListRepository(
   override fun saveTasks(tasks: List<TodoItem>) {
     val array = JSONArray()
     tasks.forEach { array.put(it.toJson()) }
-    val tasksTtxt = TodoListEngine.formatTasksSectionToTtxt(tasks, isCompleted = false)
+    val tasksText = TodoListEngine.formatTasksSectionToText(tasks, isCompleted = false)
     sharedPreferences.edit()
       .putString(KEY_TASKS_JSON, array.toString())
-      .putString(KEY_TASKS_TTXT, tasksTtxt)
+      .putString(KEY_TASKS_TEXT, tasksText)
       .apply()
-    val file = todoFile
+    val file = resolvedTodoFile
     if (file != null) {
       try {
         val currentCompleted = parseTasksJson(sharedPreferences.getString(KEY_COMPLETED_TASKS_JSON, null))
-        TodoListEngine.saveTodoListToTtxtFile(file, tasks, currentCompleted)
+        TodoListEngine.saveTodoListToTextFile(file, tasks, currentCompleted)
       } catch (_: Throwable) {}
     }
   }
 
   override fun getCompletedTodayCount(currentDate: String): Int {
     val savedDate = sharedPreferences.getString(KEY_COMPLETED_TODAY_DATE, null)
-    return if (savedDate == currentDate) {
-      sharedPreferences.getInt(KEY_COMPLETED_TODAY_COUNT, 0)
-    } else {
-      0
+    if (savedDate == currentDate) {
+      return sharedPreferences.getInt(KEY_COMPLETED_TODAY_COUNT, 0)
     }
+    val file = resolvedTodoFile
+    if (savedDate == null && (hasExplicitTodoFile || isTodoFolderAccessGranted()) && file != null && file.exists()) {
+      return TodoListEngine.loadTodoListFromTextFile(file).completedTasks.size
+    }
+    return 0
   }
 
   override fun setCompletedTodayCount(count: Int, currentDate: String) {
@@ -702,26 +795,29 @@ class SharedPreferencesTodoListRepository(
 
   override fun loadCompletedTasks(currentDate: String): List<TodoItem> {
     val savedDate = sharedPreferences.getString(KEY_COMPLETED_TODAY_DATE, null)
+    val file = resolvedTodoFile
     if (savedDate != currentDate) {
-      if (hasExplicitTodoFile && todoFile != null && todoFile.exists() && savedDate == null) {
-        return TodoListEngine.loadTodoListFromTtxtFile(todoFile).completedTasks
+      if ((hasExplicitTodoFile || isTodoFolderAccessGranted()) && file != null && file.exists() && savedDate == null) {
+        return TodoListEngine.loadTodoListFromTextFile(file).completedTasks
       }
       return emptyList()
     }
     val jsonString = sharedPreferences.getString(KEY_COMPLETED_TASKS_JSON, null)
-    val ttxtString = sharedPreferences.getString(KEY_COMPLETED_TASKS_TTXT, null)
+    val textString = sharedPreferences.getString(KEY_COMPLETED_TASKS_TEXT, null)
     val metadataCompleted = parseTasksJson(jsonString)
+    val metadataTasks = parseTasksJson(sharedPreferences.getString(KEY_TASKS_JSON, null))
 
-    if (hasExplicitTodoFile && todoFile != null && todoFile.exists()) {
-      return TodoListEngine.loadTodoListFromTtxtFile(
-        file = todoFile,
+    if ((hasExplicitTodoFile || isTodoFolderAccessGranted()) && file != null && file.exists()) {
+      return TodoListEngine.loadTodoListFromTextFile(
+        file = file,
+        metadataTasks = metadataTasks,
         metadataCompletedTasks = metadataCompleted,
       ).completedTasks
     }
 
-    if (!ttxtString.isNullOrBlank()) {
-      val parsed = TodoListEngine.parseTodoListFromTtxt(
-        rawTtxt = ttxtString,
+    if (!textString.isNullOrBlank()) {
+      val parsed = TodoListEngine.parseTodoListFromText(
+        rawText = textString,
         metadataCompletedTasks = metadataCompleted,
       )
       if (parsed.completedTasks.isNotEmpty() || metadataCompleted.isEmpty()) {
@@ -734,28 +830,28 @@ class SharedPreferencesTodoListRepository(
   override fun saveCompletedTasks(tasks: List<TodoItem>, currentDate: String) {
     val array = JSONArray()
     tasks.forEach { array.put(it.toJson()) }
-    val completedTtxt = TodoListEngine.formatTasksSectionToTtxt(tasks, isCompleted = true)
+    val completedText = TodoListEngine.formatTasksSectionToText(tasks, isCompleted = true)
     sharedPreferences.edit()
       .putString(KEY_COMPLETED_TODAY_DATE, currentDate)
       .putString(KEY_COMPLETED_TASKS_JSON, array.toString())
-      .putString(KEY_COMPLETED_TASKS_TTXT, completedTtxt)
+      .putString(KEY_COMPLETED_TASKS_TEXT, completedText)
       .apply()
-    val file = todoFile
+    val file = resolvedTodoFile
     if (file != null) {
       try {
         val currentActive = parseTasksJson(sharedPreferences.getString(KEY_TASKS_JSON, null))
-        TodoListEngine.saveTodoListToTtxtFile(file, currentActive, tasks)
+        TodoListEngine.saveTodoListToTextFile(file, currentActive, tasks)
       } catch (_: Throwable) {}
     }
   }
 
   override fun loadSavedTasks(): List<TodoItem> {
     val jsonString = sharedPreferences.getString(KEY_SAVED_TASKS_JSON, null)
-    val ttxtString = sharedPreferences.getString(KEY_SAVED_TASKS_TTXT, null)
+    val textString = sharedPreferences.getString(KEY_SAVED_TASKS_TEXT, null)
     val metadataSaved = parseTasksJson(jsonString)
-    if (!ttxtString.isNullOrBlank()) {
-      val parsed = TodoListEngine.parseTodoListFromTtxt(
-        rawTtxt = ttxtString,
+    if (!textString.isNullOrBlank()) {
+      val parsed = TodoListEngine.parseTodoListFromText(
+        rawText = textString,
         metadataTasks = metadataSaved,
       )
       if (parsed.tasks.isNotEmpty() || metadataSaved.isEmpty()) {
@@ -768,14 +864,55 @@ class SharedPreferencesTodoListRepository(
   override fun saveSavedTasks(tasks: List<TodoItem>) {
     val array = JSONArray()
     tasks.forEach { array.put(it.toJson()) }
-    val savedTtxt = TodoListEngine.formatTasksSectionToTtxt(tasks, isCompleted = false)
+    val savedText = TodoListEngine.formatTasksSectionToText(tasks, isCompleted = false)
     sharedPreferences.edit()
       .putString(KEY_SAVED_TASKS_JSON, array.toString())
-      .putString(KEY_SAVED_TASKS_TTXT, savedTtxt)
+      .putString(KEY_SAVED_TASKS_TEXT, savedText)
       .apply()
   }
 
-  override fun getTodoTtxtFile(): File? = todoFile
+  override fun isTodoFolderAccessGranted(): Boolean {
+    if (sharedPreferences.getBoolean(KEY_TODO_FOLDER_GRANTED, false)) {
+      return true
+    }
+    val rawPaths = sharedPreferences.getString(KEY_GRANTED_FOLDER_PATHS, null)
+    return TodoListEngine.isTodoFolderAccessGranted(TodoListEngine.parseGrantedFolderPaths(rawPaths))
+  }
+
+  override fun setTodoFolderAccessGranted(granted: Boolean) {
+    val updatedPaths = if (granted) {
+      getGrantedFolderPaths() + DEFAULT_TODO_SCOPED_FOLDER.displayPath
+    } else {
+      emptySet()
+    }
+    sharedPreferences.edit()
+      .putBoolean(KEY_TODO_FOLDER_GRANTED, granted)
+      .putString(KEY_GRANTED_FOLDER_PATHS, TodoListEngine.serializeGrantedFolderPaths(updatedPaths))
+      .apply()
+  }
+
+  override fun getGrantedFolderPaths(): Set<String> {
+    val parsed = TodoListEngine.parseGrantedFolderPaths(
+      sharedPreferences.getString(KEY_GRANTED_FOLDER_PATHS, null)
+    )
+    return if (sharedPreferences.getBoolean(KEY_TODO_FOLDER_GRANTED, false)) {
+      parsed + DEFAULT_TODO_SCOPED_FOLDER.displayPath
+    } else {
+      parsed
+    }
+  }
+
+  override fun setGrantedFolderPaths(paths: Set<String>) {
+    val granted = TodoListEngine.isTodoFolderAccessGranted(paths)
+    sharedPreferences.edit()
+      .putBoolean(KEY_TODO_FOLDER_GRANTED, granted)
+      .putString(KEY_GRANTED_FOLDER_PATHS, TodoListEngine.serializeGrantedFolderPaths(paths))
+      .apply()
+  }
+
+  override fun getTodoDirectory(): File? = todoDirectory ?: resolvedTodoFile?.parentFile
+
+  override fun getTodoTextFile(): File? = resolvedTodoFile
 }
 
 /**
@@ -897,13 +1034,13 @@ object TodoListEngine {
     return current
   }
 
-  private val TTXT_NESTED_LIST_LINE_REGEX = Regex("""^([ \t]*)([-+])\s+(.+)$""")
+  private val TEXT_NESTED_LIST_LINE_REGEX = Regex("""^([ \t]*)([-+])\s+(.+)$""")
 
-  private class MutableTtxtListNode(
+  private class MutableTextListNode(
     val indentSpaces: Int,
     val title: String,
     val isCompleted: Boolean,
-    val children: MutableList<MutableTtxtListNode> = mutableListOf(),
+    val children: MutableList<MutableTextListNode> = mutableListOf(),
   )
 
   /**
@@ -913,7 +1050,7 @@ object TodoListEngine {
    * - Each level of nested [TodoSubTask]s is indented by 1 tab (`"\t".repeat(level)`),
    *   using `-` for uncompleted subtasks and `+` for completed subtasks.
    */
-  fun formatTaskToTtxt(
+  fun formatTaskToText(
     task: TodoItem,
     isCompleted: Boolean = false,
   ): String {
@@ -921,27 +1058,27 @@ object TodoListEngine {
     val selfLine = "$prefix ${task.title.trim()}"
     val validSubtasks = task.subtasks.filter { it.title.isNotBlank() }
     if (validSubtasks.isEmpty()) return selfLine
-    val childLines = validSubtasks.map { it.toTtxt(indentLevel = 1) }
+    val childLines = validSubtasks.map { it.toText(indentLevel = 1) }
     return (listOf(selfLine) + childLines).joinToString("\n")
   }
 
   /**
    * Formats a list of [TodoItem]s into `.text` nested YAML list lines.
    */
-  fun formatTasksSectionToTtxt(
+  fun formatTasksSectionToText(
     tasks: List<TodoItem>,
     isCompleted: Boolean = false,
   ): String {
     return tasks
       .filter { it.title.isNotBlank() }
-      .joinToString("\n") { formatTaskToTtxt(it, isCompleted = isCompleted) }
+      .joinToString("\n") { formatTaskToText(it, isCompleted = isCompleted) }
   }
 
   /**
    * Formats the full To Do list ([tasks] and [completedTasks]) into a `.text` document
    * with YAML-style nested subtasks.
    */
-  fun formatTodoListToTtxt(
+  fun formatTodoListToText(
     tasks: List<TodoItem>,
     completedTasks: List<TodoItem> = emptyList(),
     title: String = "To Do",
@@ -951,8 +1088,8 @@ object TodoListEngine {
     if (includeHeader && title.isNotBlank()) {
       sb.append("# ").append(title.trim())
     }
-    val activeSection = formatTasksSectionToTtxt(tasks, isCompleted = false)
-    val completedSection = formatTasksSectionToTtxt(completedTasks, isCompleted = true)
+    val activeSection = formatTasksSectionToText(tasks, isCompleted = false)
+    val completedSection = formatTasksSectionToText(completedTasks, isCompleted = true)
     val combinedBody = listOf(activeSection, completedSection)
       .filter { it.isNotBlank() }
       .joinToString("\n")
@@ -963,13 +1100,13 @@ object TodoListEngine {
     return sb.toString()
   }
 
-  private fun parseTtxtLinesToNodeTree(lines: List<String>): List<MutableTtxtListNode> {
-    val rootNodes = mutableListOf<MutableTtxtListNode>()
-    val stack = mutableListOf<MutableTtxtListNode>()
+  private fun parseTextLinesToNodeTree(lines: List<String>): List<MutableTextListNode> {
+    val rootNodes = mutableListOf<MutableTextListNode>()
+    val stack = mutableListOf<MutableTextListNode>()
 
     for (rawLine in lines) {
       if (rawLine.isBlank()) continue
-      val match = TTXT_NESTED_LIST_LINE_REGEX.matchEntire(rawLine) ?: continue
+      val match = TEXT_NESTED_LIST_LINE_REGEX.matchEntire(rawLine) ?: continue
       val indentStr = match.groupValues[1].replace("\t", "  ")
       val indentSpaces = indentStr.length
       val marker = match.groupValues[2]
@@ -990,7 +1127,7 @@ object TodoListEngine {
         stack.removeAt(stack.lastIndex)
       }
 
-      val node = MutableTtxtListNode(
+      val node = MutableTextListNode(
         indentSpaces = indentSpaces,
         title = cleanTitle,
         isCompleted = isCompleted,
@@ -1006,7 +1143,7 @@ object TodoListEngine {
   }
 
   private fun convertNodesToSubtasks(
-    nodes: List<MutableTtxtListNode>,
+    nodes: List<MutableTextListNode>,
     existingSubtasks: List<TodoSubTask> = emptyList(),
   ): List<TodoSubTask> {
     val remainingExisting = existingSubtasks.toMutableList()
@@ -1034,20 +1171,20 @@ object TodoListEngine {
 
   /**
    * Parses a `.text` To Do list document (with YAML-style 2-space nested lists) into active
-   * [ParsedTodoListTtxt.tasks] (`- ` top-level items) and [ParsedTodoListTtxt.completedTasks]
+   * [ParsedTodoListText.tasks] (`- ` top-level items) and [ParsedTodoListText.completedTasks]
    * (`+ ` top-level items), merging with optional [metadataTasks] and [metadataCompletedTasks].
    */
-  fun parseTodoListFromTtxt(
-    rawTtxt: String,
+  fun parseTodoListFromText(
+    rawText: String,
     metadataTasks: List<TodoItem> = emptyList(),
     metadataCompletedTasks: List<TodoItem> = emptyList(),
     nowMs: Long = System.currentTimeMillis(),
-  ): ParsedTodoListTtxt {
-    val normalized = rawTtxt.replace("\r\n", "\n").replace('\r', '\n')
+  ): ParsedTodoListText {
+    val normalized = rawText.replace("\r\n", "\n").replace('\r', '\n')
     val lines = normalized.split('\n')
     val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
     if (firstNonBlankIdx == -1) {
-      return ParsedTodoListTtxt()
+      return ParsedTodoListText()
     }
 
     val firstTrimmed = lines[firstNonBlankIdx].trim()
@@ -1061,7 +1198,7 @@ object TodoListEngine {
       bodyLines = lines.drop(firstNonBlankIdx)
     }
 
-    val rootNodes = parseTtxtLinesToNodeTree(bodyLines)
+    val rootNodes = parseTextLinesToNodeTree(bodyLines)
     val remainingActiveMeta = metadataTasks.toMutableList()
     val remainingCompletedMeta = metadataCompletedTasks.toMutableList()
     val activeTasks = mutableListOf<TodoItem>()
@@ -1102,7 +1239,7 @@ object TodoListEngine {
       }
     }
 
-    return ParsedTodoListTtxt(
+    return ParsedTodoListText(
       title = docTitle,
       tasks = activeTasks,
       completedTasks = completedTasks,
@@ -1112,22 +1249,22 @@ object TodoListEngine {
   /**
    * Parses a single [TodoItem] (and its nested YAML subtasks) from a `.text` string.
    */
-  fun parseTaskFromTtxt(
-    rawTtxt: String,
+  fun parseTaskFromText(
+    rawText: String,
     id: String = UUID.randomUUID().toString(),
     nowMs: Long = System.currentTimeMillis(),
   ): TodoItem {
-    val parsed = parseTodoListFromTtxt(rawTtxt = rawTtxt, nowMs = nowMs)
+    val parsed = parseTodoListFromText(rawText = rawText, nowMs = nowMs)
     val allTopLevel = parsed.tasks + parsed.completedTasks
     if (allTopLevel.size == 1) {
       return allTopLevel.first().copy(id = id, createdAt = nowMs)
     }
     if (allTopLevel.size > 1) {
-      val normalized = rawTtxt.replace("\r\n", "\n").replace('\r', '\n')
+      val normalized = rawText.replace("\r\n", "\n").replace('\r', '\n')
       val firstNonBlank = normalized.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
       if (firstNonBlank.startsWith("# ")) {
         val headingTitle = firstNonBlank.removePrefix("# ").trim()
-        val bodyNodes = parseTtxtLinesToNodeTree(
+        val bodyNodes = parseTextLinesToNodeTree(
           normalized.lines().dropWhile { it.isBlank() || it.trim().startsWith("#") }
         )
         return TodoItem(
@@ -1140,7 +1277,7 @@ object TodoListEngine {
       val first = allTopLevel.first()
       return first.copy(id = id, createdAt = nowMs)
     }
-    val fallbackTitle = rawTtxt.lineSequence()
+    val fallbackTitle = rawText.lineSequence()
       .map { it.trim().removePrefix("#").trim() }
       .firstOrNull { it.isNotEmpty() }
       .orEmpty()
@@ -1154,7 +1291,7 @@ object TodoListEngine {
   /**
    * Writes the To Do list ([tasks] and [completedTasks]) to [file] in `.text` format.
    */
-  fun saveTodoListToTtxtFile(
+  fun saveTodoListToTextFile(
     file: File,
     tasks: List<TodoItem>,
     completedTasks: List<TodoItem> = emptyList(),
@@ -1164,27 +1301,27 @@ object TodoListEngine {
         parent.mkdirs()
       }
     }
-    file.writeText(formatTodoListToTtxt(tasks = tasks, completedTasks = completedTasks))
+    file.writeText(formatTodoListToText(tasks = tasks, completedTasks = completedTasks))
   }
 
   /**
    * Reads and parses a `.text` To Do list from [file].
    */
-  fun loadTodoListFromTtxtFile(
+  fun loadTodoListFromTextFile(
     file: File,
     metadataTasks: List<TodoItem> = emptyList(),
     metadataCompletedTasks: List<TodoItem> = emptyList(),
-  ): ParsedTodoListTtxt {
+  ): ParsedTodoListText {
     if (!file.exists() || !file.isFile) {
-      return ParsedTodoListTtxt(tasks = metadataTasks, completedTasks = metadataCompletedTasks)
+      return ParsedTodoListText(tasks = metadataTasks, completedTasks = metadataCompletedTasks)
     }
-    val rawTtxt = try {
+    val rawText = try {
       file.readText()
     } catch (_: Throwable) {
-      return ParsedTodoListTtxt(tasks = metadataTasks, completedTasks = metadataCompletedTasks)
+      return ParsedTodoListText(tasks = metadataTasks, completedTasks = metadataCompletedTasks)
     }
-    return parseTodoListFromTtxt(
-      rawTtxt = rawTtxt,
+    return parseTodoListFromText(
+      rawText = rawText,
       metadataTasks = metadataTasks,
       metadataCompletedTasks = metadataCompletedTasks,
       nowMs = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis(),
@@ -1192,14 +1329,138 @@ object TodoListEngine {
   }
 
   /**
-   * Resolves the default `todo_list.text` file inside `/Notes` (or app files fallback).
+   * Resolves the `/ToDo` directory in the root storage ([userRoot]), falling back to app storage
+   * `/ToDo` in restricted/test environments where external root storage isn't directly writable via [File].
    */
-  fun getDefaultTodoTtxtFile(
+  fun getDefaultTodoDirectory(
     context: Context? = null,
     userRoot: File = FileManagerEngine.getUserRootDirectory(),
   ): File {
-    val notesDir = NotesEngine.getDefaultNotesDirectory(context = context, userRoot = userRoot)
-    return File(notesDir, TODO_LIST_TTXT_FILE_NAME)
+    val primaryTodoDir = File(userRoot, TODO_ROOT_FOLDER_NAME)
+    try {
+      if ((primaryTodoDir.exists() && primaryTodoDir.canWrite()) || primaryTodoDir.mkdirs()) {
+        return primaryTodoDir
+      }
+    } catch (_: Throwable) {}
+
+    if (context != null) {
+      val fallbackParent = context.getExternalFilesDir(null) ?: context.filesDir
+      val fallbackTodoDir = File(fallbackParent, TODO_ROOT_FOLDER_NAME)
+      fallbackTodoDir.mkdirs()
+      return fallbackTodoDir
+    }
+    return primaryTodoDir
+  }
+
+  /**
+   * Resolves the default `to-do.text` file inside `/ToDo` (or app files fallback).
+   */
+  fun getDefaultTodoTextFile(
+    context: Context? = null,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): File {
+    val todoDir = getDefaultTodoDirectory(context = context, userRoot = userRoot)
+    return File(todoDir, TODO_LIST_TEXT_FILE_NAME)
+  }
+
+  /**
+   * Creates the Android system prompt [Intent] (`Intent.ACTION_OPEN_DOCUMENT_TREE`) scoped to `/ToDo`
+   * in the root directory so the user can grant scoped storage access to use the To Do tool.
+   */
+  fun createFolderAccessIntent(
+    context: Context? = null,
+    folder: TodoFolder = DEFAULT_TODO_SCOPED_FOLDER,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): Intent {
+    val relativePath = folder.displayPath.trim().trim('/').ifEmpty { TODO_ROOT_FOLDER_NAME }
+    try {
+      val targetDir = if (!folder.customAbsolutePath.isNullOrBlank()) {
+        File(folder.customAbsolutePath)
+      } else {
+        File(userRoot, relativePath)
+      }
+      if (!targetDir.exists()) {
+        targetDir.mkdirs()
+      }
+    } catch (_: Throwable) {}
+
+    val docId = "primary:$relativePath"
+    val initialUri = try {
+      DocumentsContract.buildDocumentUri(
+        TODO_EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY,
+        docId,
+      )
+    } catch (_: Throwable) {
+      Uri.parse("content://$TODO_EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY/document/primary%3A$relativePath")
+    }
+    val baseIntent = if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
+        val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as? StorageManager
+        storageManager?.primaryStorageVolume?.createOpenDocumentTreeIntent()
+      } catch (_: Throwable) {
+        null
+      }
+    } else {
+      null
+    } ?: Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+
+    return baseIntent.apply {
+      action = Intent.ACTION_OPEN_DOCUMENT_TREE
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+      }
+      addFlags(
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+          Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+      )
+    }
+  }
+
+  fun isTodoFolderAccessGranted(grantedFolderPaths: Set<String>): Boolean {
+    return grantedFolderPaths.any { path ->
+      val clean = path.trim().trim('/')
+      clean.equals(TODO_ROOT_FOLDER_NAME, ignoreCase = true)
+    }
+  }
+
+  fun parseGrantedFolderPaths(raw: String?): Set<String> {
+    if (raw.isNullOrBlank()) return emptySet()
+    return raw.split('\n')
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .map { if (it.startsWith("/")) it else "/$it" }
+      .toSet()
+  }
+
+  fun serializeGrantedFolderPaths(paths: Set<String>): String {
+    return paths
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .map { if (it.startsWith("/")) it else "/$it" }
+      .distinct()
+      .joinToString("\n")
+  }
+
+  fun getGrantedFolderPaths(context: Context): Set<String> {
+    return SharedPreferencesTodoListRepository(context).getGrantedFolderPaths()
+  }
+
+  fun setFolderPathAccessGranted(
+    context: Context,
+    folderPath: String = DEFAULT_TODO_SCOPED_FOLDER.displayPath,
+    granted: Boolean = true,
+  ): Set<String> {
+    val repo = SharedPreferencesTodoListRepository(context)
+    val normalized = if (folderPath.startsWith("/")) folderPath else "/$folderPath"
+    val updated = if (granted) {
+      repo.getGrantedFolderPaths() + normalized
+    } else {
+      repo.getGrantedFolderPaths().filterNot { it.equals(normalized, ignoreCase = true) }.toSet()
+    }
+    repo.setGrantedFolderPaths(updated)
+    return updated
   }
 
   /**
@@ -1407,29 +1668,69 @@ object TodoListEngine {
     }
   }
 
+  private fun appendSubTaskAtDepth(
+    subtasks: List<TodoSubTask>,
+    newChild: TodoSubTask,
+    remainingDepth: Int,
+  ): List<TodoSubTask> {
+    if (remainingDepth <= 0 || subtasks.isEmpty()) {
+      return subtasks + newChild
+    }
+    val lastIdx = subtasks.lastIndex
+    val last = subtasks[lastIdx]
+    val updatedLast = last.copy(
+      subtasks = appendSubTaskAtDepth(last.subtasks, newChild, remainingDepth - 1)
+    )
+    return subtasks.dropLast(1) + updatedLast
+  }
+
   /**
-   * Appends a subtask to a task. If [subtaskTitle] contains a multi-line YAML-indented `.text` list,
+   * Appends a subtask to a task. If [subtaskTitle] contains a multi-line tab-indented `.text` list,
    * parses the nested subtask hierarchy in place.
    */
   fun addSubTask(tasks: List<TodoItem>, taskId: String, subtaskTitle: String): List<TodoItem> {
     val trimmed = subtaskTitle.trim()
     if (trimmed.isEmpty()) return tasks
     val hasMultipleLines = subtaskTitle.contains('\n') || subtaskTitle.contains('\r')
-    val parsedSubtasks = if (hasMultipleLines) {
-      val nodes = parseTtxtLinesToNodeTree(
-        subtaskTitle.replace("\r\n", "\n").replace('\r', '\n').lines()
-      )
-      if (nodes.isNotEmpty()) {
+    if (hasMultipleLines) {
+      val rawLines = subtaskTitle.replace("\r\n", "\n").replace('\r', '\n').lines()
+      val normalizedLines = rawLines.mapNotNull { line ->
+        if (line.isBlank()) {
+          null
+        } else if (TEXT_NESTED_LIST_LINE_REGEX.matches(line)) {
+          line
+        } else {
+          val indent = line.takeWhile { it == ' ' || it == '\t' }
+          val body = line.drop(indent.length).trim()
+          if (body.isEmpty()) null else "$indent- $body"
+        }
+      }
+      val nodes = parseTextLinesToNodeTree(normalizedLines)
+      val parsedSubtasks = if (nodes.isNotEmpty()) {
         convertNodesToSubtasks(nodes)
       } else {
         listOf(TodoSubTask(title = trimmed))
       }
-    } else {
-      listOf(TodoSubTask(title = trimmed))
+      return tasks.map { item ->
+        if (item.id == taskId) {
+          item.copy(subtasks = item.subtasks + parsedSubtasks)
+        } else item
+      }
     }
+
+    val leadingTabs = subtaskTitle.takeWhile { it == '\t' }.length
+    val isCompleted = trimmed.startsWith("+ ")
+    val cleanTitle = when {
+      trimmed.startsWith("- ") || trimmed.startsWith("+ ") -> trimmed.substring(2).trim()
+      else -> trimmed
+    }
+    if (cleanTitle.isEmpty()) return tasks
+    val newSub = TodoSubTask(title = cleanTitle, isCompleted = isCompleted)
     return tasks.map { item ->
       if (item.id == taskId) {
-        item.copy(subtasks = item.subtasks + parsedSubtasks)
+        item.copy(
+          subtasks = appendSubTaskAtDepth(item.subtasks, newSub, leadingTabs)
+        )
       } else item
     }
   }
@@ -1494,6 +1795,11 @@ object TodoListEngine {
       } else item
     }
   }
+
+  fun findSubTask(
+    subtasks: List<TodoSubTask>,
+    subtaskId: String,
+  ): TodoSubTask? = findSubTaskRecursive(subtasks, subtaskId)
 
   private fun findSubTaskRecursive(
     subtasks: List<TodoSubTask>,
@@ -1585,6 +1891,16 @@ object TodoListEngine {
     return tasks.filter { it.isVisibleInMainTasksView(nowMillis, horizonMillis) }
   }
 
+  private fun containsSubTaskQueryRecursive(
+    subtasks: List<TodoSubTask>,
+    query: String,
+  ): Boolean {
+    return subtasks.any { sub ->
+      sub.title.contains(query, ignoreCase = true) ||
+        (sub.subtasks.isNotEmpty() && containsSubTaskQueryRecursive(sub.subtasks, query))
+    }
+  }
+
   /**
    * Filters [tasks] by case-insensitive substring matching across title, notes, subtasks,
    * formatted schedule label, and recurrence rule label.
@@ -1595,12 +1911,28 @@ object TodoListEngine {
     return tasks.filter { task ->
       task.title.contains(trimmed, ignoreCase = true) ||
         task.notes.contains(trimmed, ignoreCase = true) ||
-        task.subtasks.any { it.title.contains(trimmed, ignoreCase = true) } ||
+        containsSubTaskQueryRecursive(task.subtasks, trimmed) ||
         (task.scheduledAtMillis != null &&
           formatScheduleLabel(task.scheduledAtMillis, task.scheduledEndMillis)
             .contains(trimmed, ignoreCase = true)) ||
         (task.recurrenceRule != null &&
           task.recurrenceRule.formatLabel().contains(trimmed, ignoreCase = true))
+    }
+  }
+
+  private fun setAllSubTasksCompletedRecursive(
+    subtasks: List<TodoSubTask>,
+    isCompleted: Boolean,
+  ): List<TodoSubTask> {
+    return subtasks.map { sub ->
+      sub.copy(
+        isCompleted = isCompleted,
+        subtasks = if (sub.subtasks.isNotEmpty()) {
+          setAllSubTasksCompletedRecursive(sub.subtasks, isCompleted)
+        } else {
+          emptyList()
+        },
+      )
     }
   }
 
@@ -1634,12 +1966,12 @@ object TodoListEngine {
         scheduledAtMillis = nextStart,
         scheduledEndMillis = duration?.let { nextStart + it },
         notifiedAtScheduleMillis = null,
-        subtasks = task.subtasks.map { it.copy(isCompleted = false) },
+        subtasks = setAllSubTasksCompletedRecursive(task.subtasks, false),
       )
       val completedOccurrence = task.copy(
         id = "${task.id}_completed_$nowMillis",
         isSubtasksCollapsed = true,
-        subtasks = task.subtasks.map { it.copy(isCompleted = true) },
+        subtasks = setAllSubTasksCompletedRecursive(task.subtasks, true),
       )
       return snapshot.copy(
         tasks = snapshot.tasks.map { if (it.id == taskId) rescheduledTask else it },
@@ -1651,7 +1983,7 @@ object TodoListEngine {
     val updatedTasks = snapshot.tasks.filter { it.id != taskId }
     val completedItem = task.copy(
       isSubtasksCollapsed = true,
-      subtasks = task.subtasks.map { it.copy(isCompleted = true) },
+      subtasks = setAllSubTasksCompletedRecursive(task.subtasks, true),
     )
     return snapshot.copy(
       tasks = updatedTasks,
@@ -1692,7 +2024,7 @@ object TodoListEngine {
             scheduledAtMillis = nextStart,
             scheduledEndMillis = duration?.let { nextStart + it },
             notifiedAtScheduleMillis = null,
-            subtasks = task.subtasks.map { it.copy(isCompleted = false) },
+            subtasks = setAllSubTasksCompletedRecursive(task.subtasks, false),
           )
         } else {
           null
@@ -1709,7 +2041,7 @@ object TodoListEngine {
       task.copy(
         id = completedId,
         isSubtasksCollapsed = true,
-        subtasks = task.subtasks.map { it.copy(isCompleted = true) },
+        subtasks = setAllSubTasksCompletedRecursive(task.subtasks, true),
       )
     }
     return snapshot.copy(
@@ -1801,6 +2133,43 @@ object TodoListEngine {
     )
   }
 
+  private fun cloneSubTasksWithFreshIdsAndResetCompletion(
+    subtasks: List<TodoSubTask>,
+  ): List<TodoSubTask> {
+    return subtasks.map { sub ->
+      TodoSubTask(
+        title = sub.title,
+        isCompleted = false,
+        subtasks = if (sub.subtasks.isNotEmpty()) {
+          cloneSubTasksWithFreshIdsAndResetCompletion(sub.subtasks)
+        } else {
+          emptyList()
+        },
+      )
+    }
+  }
+
+  /**
+   * Creates a fresh active [TodoItem] instance from a saved task template [savedTask],
+   * resetting subtask completion states and assigning fresh IDs.
+   */
+  fun instantiateSavedTask(
+    savedTask: TodoItem,
+    scheduledAtMillis: Long? = null,
+    scheduledEndMillis: Long? = null,
+    recurrenceRule: TodoRecurrenceRule? = null,
+  ): TodoItem {
+    return TodoItem(
+      title = savedTask.title,
+      notes = savedTask.notes,
+      subtasks = cloneSubTasksWithFreshIdsAndResetCompletion(savedTask.subtasks),
+      isSubtasksCollapsed = false,
+      scheduledAtMillis = scheduledAtMillis,
+      scheduledEndMillis = scheduledEndMillis,
+      recurrenceRule = recurrenceRule,
+    )
+  }
+
   /**
    * Saves [task] as a template in [savedTasks], preserving its title, notes, and subtasks
    * (with completion reset to false) and deduplicating by trimmed title.
@@ -1811,10 +2180,39 @@ object TodoListEngine {
     val template = TodoItem(
       title = trimmed,
       notes = task.notes.trim(),
-      subtasks = task.subtasks.map { TodoSubTask(title = it.title, isCompleted = false) },
+      subtasks = cloneSubTasksWithFreshIdsAndResetCompletion(task.subtasks),
       isSubtasksCollapsed = false,
     )
     return listOf(template) + savedTasks.filter { it.title != trimmed }
+  }
+
+  /**
+   * Returns saved tasks from [savedTasks] whose title, notes, or subtasks match [query]
+   * (case-insensitive), prioritizing title prefix matches followed by title substring matches
+   * and subtask/notes matches.
+   */
+  fun getSavedTaskSuggestions(
+    savedTasks: List<TodoItem>,
+    query: String,
+  ): List<TodoItem> {
+    val trimmed = query.trim()
+    if (trimmed.isEmpty()) return emptyList()
+    val matching = savedTasks.filter { item ->
+      val itemTitle = item.title.trim()
+      itemTitle.isNotEmpty() && (
+        itemTitle.contains(trimmed, ignoreCase = true) ||
+          item.notes.contains(trimmed, ignoreCase = true) ||
+          containsSubTaskQueryRecursive(item.subtasks, trimmed)
+        )
+    }.distinctBy { it.title.trim().lowercase(Locale.US) }
+
+    val (prefixMatches, otherMatches) = matching.partition { item ->
+      item.title.trim().startsWith(trimmed, ignoreCase = true)
+    }
+    val (titleContainsMatches, metadataMatches) = otherMatches.partition { item ->
+      item.title.trim().contains(trimmed, ignoreCase = true)
+    }
+    return prefixMatches + titleContainsMatches + metadataMatches
   }
 
   /**

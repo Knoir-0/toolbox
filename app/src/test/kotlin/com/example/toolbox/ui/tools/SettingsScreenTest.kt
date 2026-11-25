@@ -371,38 +371,41 @@ class SettingsScreenTest {
     }
 
     // Specific category assignments
-    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.CALCULATOR.category)
-    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.UNIT_CONVERTER.category)
-    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.RULER.category)
-    assertEquals(ToolCategory.MUSIC_AND_INSTRUMENTS, Tool.GUITAR_TUNER.category)
-    assertEquals(ToolCategory.MUSIC_AND_INSTRUMENTS, Tool.METRONOME.category)
-    assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.AUDIO_RECORDER.category)
-    assertEquals(ToolCategory.MUSIC_AND_INSTRUMENTS, Tool.CHORD_BOOK.category)
-    assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.AUDIO_EDITOR.category)
-    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.COLOR_PICKER.category)
-    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.IMAGE.category)
-    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.IMAGE_EDITOR.category)
-    assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILE_CONVERTER.category)
-    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.GALLERY.category)
-    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.CAMERA.category)
-    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.VIDEO_EDITOR.category)
-    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.SCREEN_RECORDER.category)
+    assertEquals(ToolCategory.MATH, Tool.CALCULATOR.category)
+    assertEquals(ToolCategory.MATH, Tool.UNIT_CONVERTER.category)
+    assertEquals(ToolCategory.MATH, Tool.RULER.category)
+    assertEquals(ToolCategory.INSTRUMENTS, Tool.GUITAR_TUNER.category)
+    assertEquals(ToolCategory.INSTRUMENTS, Tool.METRONOME.category)
+    assertEquals(ToolCategory.AUDIO, Tool.AUDIO_RECORDER.category)
+    assertEquals(ToolCategory.INSTRUMENTS, Tool.CHORD_BOOK.category)
+    assertEquals(ToolCategory.AUDIO, Tool.AUDIO_EDITOR.category)
+    assertEquals(ToolCategory.DESIGN, Tool.COLOR_PICKER.category)
+    assertEquals(ToolCategory.DESIGN, Tool.IMAGE.category)
+    assertEquals(ToolCategory.DESIGN, Tool.IMAGE_EDITOR.category)
+    assertEquals(ToolCategory.FILES, Tool.FILE_CONVERTER.category)
+    assertEquals(ToolCategory.MEDIA, Tool.GALLERY.category)
+    assertEquals(ToolCategory.MEDIA, Tool.CAMERA.category)
+    assertEquals(ToolCategory.DESIGN, Tool.VIDEO_EDITOR.category)
+    assertEquals(ToolCategory.MEDIA, Tool.SCREEN_RECORDER.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.TODO_LIST.category)
-    assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILES.category)
+    assertEquals(ToolCategory.FILES, Tool.FILES.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.NOTES.category)
-    assertEquals(ToolCategory.MISCELLANEOUS, Tool.PLANT_SCHEDULE.category)
+    assertEquals(ToolCategory.LIFESTYLE, Tool.PLANT_SCHEDULE.category)
+    assertEquals(ToolCategory.LIFESTYLE, Tool.RECIPES.category)
+    assertEquals(ToolCategory.LIFESTYLE, Tool.STARS.category)
     assertEquals(ToolCategory.MISCELLANEOUS, Tool.DICE_ROLLER.category)
-    assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.BLUETOOTH_REMOTE.category)
-    assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.BLUETOOTH_GAMEPAD.category)
-    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.DECIBEL_METER.category)
-    assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.ARCHIVE.category)
-    assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.MUSIC.category)
-    assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.PDF_VIEWER.category)
-    assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.OBD2_SCANNER.category)
-    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.ELEMENTS.category)
+    assertEquals(ToolCategory.DEVICES, Tool.BLUETOOTH_REMOTE.category)
+    assertEquals(ToolCategory.DEVICES, Tool.BLUETOOTH_GAMEPAD.category)
+    assertEquals(ToolCategory.AUDIO, Tool.DECIBEL_METER.category)
+    assertEquals(ToolCategory.FILES, Tool.ARCHIVE.category)
+    assertEquals(ToolCategory.AUDIO, Tool.MUSIC.category)
+    assertEquals(ToolCategory.FILES, Tool.PDF_VIEWER.category)
+    assertEquals(ToolCategory.DEVICES, Tool.OBD2_SCANNER.category)
+    assertEquals(ToolCategory.MATH, Tool.ELEMENTS.category)
     assertEquals(ToolCategory.MISCELLANEOUS, Tool.GOOD.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.CALENDAR.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SEARCH.category)
+    assertEquals(ToolCategory.SYSTEM, Tool.TERMINAL.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
   }
 
@@ -471,12 +474,14 @@ class SettingsScreenTest {
     assertEquals(
       listOf(
         "Audio",
+        "Design",
         "Devices",
         "Files",
         "Instruments",
         "Lifestyle",
-        "Math & Measure",
-        "Photo & Video",
+        "Math",
+        "Media",
+        "Miscellaneous",
         "Productivity",
         "System",
       ),

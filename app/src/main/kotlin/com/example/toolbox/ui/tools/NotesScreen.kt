@@ -812,7 +812,7 @@ fun NotesScreen(
         CrossToolActions.exportTextAsFile(
           context = context,
           suggestedFileName = "$baseName$NOTES_FILE_DOT_EXTENSION",
-          content = note.toTtxt(),
+          content = note.toText(),
           targetDir = repo.getNotesDirectory(),
         )
       },

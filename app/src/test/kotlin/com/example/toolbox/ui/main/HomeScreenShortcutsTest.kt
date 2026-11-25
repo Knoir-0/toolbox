@@ -177,4 +177,40 @@ class HomeScreenShortcutsTest {
     assertEquals("extra_notes_quick_capture_mode", EXTRA_NOTES_QUICK_CAPTURE_MODE)
     assertNull(parseNotesQuickCaptureMode(null))
   }
+
+  @Test
+  fun viewerTool_isTitledViewer_andOpenWithAliasesResolveToTools() {
+    assertEquals("Viewer", Tool.IMAGE.title)
+    assertEquals(Tool.IMAGE, Tool.IMAGE_VIEWER)
+    assertEquals("extra_initial_file_path", EXTRA_INITIAL_FILE_PATH)
+
+    val openWithTools = listOf(
+      Tool.PDF_VIEWER to "com.example.toolbox.MainActivityToolPdfViewer",
+      Tool.IMAGE to "com.example.toolbox.MainActivityToolImage",
+      Tool.GALLERY to "com.example.toolbox.MainActivityToolGallery",
+      Tool.IMAGE_EDITOR to "com.example.toolbox.MainActivityToolImageEditor",
+      Tool.COLOR_PICKER to "com.example.toolbox.MainActivityToolColorPicker",
+      Tool.VIDEO_EDITOR to "com.example.toolbox.MainActivityToolVideoEditor",
+      Tool.MUSIC to "com.example.toolbox.MainActivityToolMusicPlayer",
+      Tool.AUDIO_EDITOR to "com.example.toolbox.MainActivityToolAudioEditor",
+      Tool.ARCHIVE to "com.example.toolbox.MainActivityToolArchive",
+      Tool.FILE_CONVERTER to "com.example.toolbox.MainActivityToolFileConverter",
+      Tool.NOTES to "com.example.toolbox.MainActivityToolNotes",
+      Tool.FILES to "com.example.toolbox.MainActivityToolFiles",
+    )
+    for ((expectedTool, aliasClassName) in openWithTools) {
+      assertEquals(expectedTool, parseStandaloneToolFromComponent(aliasClassName))
+    }
+
+    assertEquals("pdf", com.example.toolbox.ui.tools.inferExtensionFromMimeType("application/pdf"))
+    assertEquals("jpg", com.example.toolbox.ui.tools.inferExtensionFromMimeType("image/jpeg"))
+    assertEquals("png", com.example.toolbox.ui.tools.inferExtensionFromMimeType("image/png"))
+    assertEquals("mp3", com.example.toolbox.ui.tools.inferExtensionFromMimeType("audio/mpeg"))
+    assertEquals("mp4", com.example.toolbox.ui.tools.inferExtensionFromMimeType("video/mp4"))
+    assertEquals("zip", com.example.toolbox.ui.tools.inferExtensionFromMimeType("application/zip"))
+    assertEquals("txt", com.example.toolbox.ui.tools.inferExtensionFromMimeType("text/plain"))
+    assertEquals("md", com.example.toolbox.ui.tools.inferExtensionFromMimeType("text/markdown"))
+    assertNull(com.example.toolbox.ui.tools.inferExtensionFromMimeType("image/*"))
+    assertNull(com.example.toolbox.ui.tools.inferExtensionFromMimeType(null))
+  }
 }

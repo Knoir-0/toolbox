@@ -14,7 +14,7 @@ class ElementsEngineTest {
   @Test
   fun toolRegistration_elementsIsCalledElementsAndHiddenByDefault() {
     assertEquals("Elements", Tool.ELEMENTS.title)
-    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.ELEMENTS.category)
+    assertEquals(ToolCategory.MATH, Tool.ELEMENTS.category)
     assertTrue("Elements must be hidden by default", Tool.ELEMENTS in DEFAULT_HIDDEN_TOOLS)
   }
 

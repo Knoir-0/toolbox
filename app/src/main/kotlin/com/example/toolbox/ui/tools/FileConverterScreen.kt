@@ -1032,6 +1032,10 @@ internal fun resolveRealFileFromUri(context: Context, uri: Uri): File? {
       }
     }
 
+    ToolboxFileProvider.resolveFileFromUri(context, uri)?.let { providerFile ->
+      if (providerFile.exists() && providerFile.isFile) return providerFile
+    }
+
     val contentResolver = context.contentResolver
     val rootDir = FileManagerEngine.getUserRootDirectory()
 
@@ -1237,7 +1241,52 @@ internal fun resolveRealFileFromUri(context: Context, uri: Uri): File? {
   return null
 }
 
-internal fun copyUriToTempSourceFile(context: Context, uri: Uri): File? {
+internal fun inferExtensionFromMimeType(mimeType: String?): String? {
+  val clean = mimeType?.trim()?.lowercase(java.util.Locale.ROOT)?.substringBefore(';')?.takeIf { it.isNotEmpty() && !it.endsWith("/*") }
+    ?: return null
+  return when (clean) {
+    "application/pdf" -> "pdf"
+    "image/jpeg", "image/jpg" -> "jpg"
+    "image/png" -> "png"
+    "image/webp" -> "webp"
+    "image/gif" -> "gif"
+    "image/bmp", "image/x-ms-bmp" -> "bmp"
+    "image/heic" -> "heic"
+    "image/heif" -> "heif"
+    "image/svg+xml" -> "svg"
+    "audio/mpeg", "audio/mp3" -> "mp3"
+    "audio/wav", "audio/x-wav", "audio/wave" -> "wav"
+    "audio/ogg", "application/ogg" -> "ogg"
+    "audio/flac", "audio/x-flac" -> "flac"
+    "audio/mp4", "audio/m4a", "audio/x-m4a" -> "m4a"
+    "audio/aac" -> "aac"
+    "video/mp4" -> "mp4"
+    "video/x-matroska" -> "mkv"
+    "video/webm" -> "webm"
+    "video/quicktime" -> "mov"
+    "video/x-msvideo" -> "avi"
+    "application/zip", "application/x-zip-compressed" -> "zip"
+    "application/x-tar" -> "tar"
+    "application/gzip", "application/x-gzip" -> "gz"
+    "application/x-tgz" -> "tgz"
+    "application/x-bzip2" -> "bz2"
+    "application/x-xz" -> "xz"
+    "application/x-7z-compressed" -> "7z"
+    "application/x-rar-compressed", "application/vnd.rar" -> "rar"
+    "text/plain" -> "txt"
+    "text/markdown", "text/x-markdown" -> "md"
+    "text/csv" -> "csv"
+    "application/json" -> "json"
+    "application/xml", "text/xml" -> "xml"
+    else -> android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(clean)
+  }
+}
+
+internal fun copyUriToTempSourceFile(
+  context: Context,
+  uri: Uri,
+  fallbackMimeType: String? = null,
+): File? {
   // First try resolving the real underlying file on storage so edits/conversions save back to its original location
   resolveRealFileFromUri(context, uri)?.let { realFile ->
     if (realFile.canRead()) {
@@ -1247,15 +1296,29 @@ internal fun copyUriToTempSourceFile(context: Context, uri: Uri): File? {
   return try {
     val contentResolver = context.contentResolver
     var displayName: String? = null
-    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-      if (cursor.moveToFirst()) {
-        val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-        if (idx >= 0) displayName = cursor.getString(idx)
+    try {
+      contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) {
+          val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+          if (idx >= 0) displayName = cursor.getString(idx)
+        }
       }
-    }
-    val safeName = (displayName ?: uri.lastPathSegment ?: "imported_file")
+    } catch (_: Throwable) {}
+    val baseName = (displayName ?: uri.lastPathSegment ?: "imported_file")
       .substringAfterLast('/')
       .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+      .ifBlank { "imported_file" }
+    val safeName = if (baseName.contains('.')) {
+      baseName
+    } else {
+      val mime = try {
+        contentResolver.getType(uri)
+      } catch (_: Throwable) {
+        null
+      } ?: fallbackMimeType
+      val ext = inferExtensionFromMimeType(mime)
+      if (!ext.isNullOrBlank()) "$baseName.$ext" else baseName
+    }
     val importDir = File(context.cacheDir, "converter_imports").apply { mkdirs() }
     val dstFile = File(importDir, safeName)
     contentResolver.openInputStream(uri)?.use { input ->

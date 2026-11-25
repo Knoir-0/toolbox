@@ -501,6 +501,56 @@ class TodoListTest {
   }
 
   @Test
+  fun engine_getSavedTaskSuggestions_prioritizesPrefixMatchesAndMatchesSubtasksAndNotes() {
+    val saved1 = TodoItem(
+      id = "saved-1",
+      title = "Morning Routine",
+      subtasks = listOf(
+        TodoSubTask(id = "s1", title = "Brew coffee"),
+        TodoSubTask(id = "s2", title = "Review daily goals"),
+      ),
+    )
+    val saved2 = TodoItem(
+      id = "saved-2",
+      title = "Late Morning Stretch",
+      notes = "10 minutes yoga mat",
+    )
+    val saved3 = TodoItem(
+      id = "saved-3",
+      title = "Weekly Grocery Run",
+      subtasks = listOf(
+        TodoSubTask(id = "s3", title = "Buy morning oats"),
+      ),
+    )
+    val savedTasks = listOf(saved2, saved3, saved1)
+
+    // Empty or blank query returns no suggestions
+    assertTrue(TodoListEngine.getSavedTaskSuggestions(savedTasks, "").isEmpty())
+    assertTrue(TodoListEngine.getSavedTaskSuggestions(savedTasks, "   ").isEmpty())
+
+    // Query "morn" matches all three, prioritizing prefix ("Morning Routine") over title substring ("Late Morning Stretch") and subtask match ("Weekly Grocery Run")
+    val mornSuggestions = TodoListEngine.getSavedTaskSuggestions(savedTasks, "morn")
+    assertEquals(
+      listOf("Morning Routine", "Late Morning Stretch", "Weekly Grocery Run"),
+      mornSuggestions.map { it.title },
+    )
+
+    // Query matching subtask ("coffee") surfaces parent saved task
+    val subtaskSuggestions = TodoListEngine.getSavedTaskSuggestions(savedTasks, "coffee")
+    assertEquals(listOf("Morning Routine"), subtaskSuggestions.map { it.title })
+
+    // Query matching notes ("yoga") surfaces saved task
+    val noteSuggestions = TodoListEngine.getSavedTaskSuggestions(savedTasks, "yoga")
+    assertEquals(listOf("Late Morning Stretch"), noteSuggestions.map { it.title })
+
+    // Instantiating a saved task creates a fresh task with reset subtask completion
+    val instantiated = TodoListEngine.instantiateSavedTask(saved1)
+    assertEquals("Morning Routine", instantiated.title)
+    assertEquals(2, instantiated.subtasks.size)
+    assertFalse(instantiated.subtasks.any { it.isCompleted })
+  }
+
+  @Test
   fun engine_schedulesReschedulesAndDetectsDueNotifications() {
     val baseTime = 1_760_000_000_000L
     val initial = listOf(
@@ -1003,7 +1053,13 @@ class TodoListTest {
   }
 
   @Test
-  fun todoList_savesAndLoadsTtxtFormat_withYamlNestedSubtaskLists() {
+  fun todoList_savesAndLoadsTextFormat_withYamlNestedSubtaskLists() {
+    assertEquals("to-do.text", TODO_LIST_TEXT_FILE_NAME)
+    assertEquals("ToDo", TODO_ROOT_FOLDER_NAME)
+    assertEquals("/ToDo", DEFAULT_TODO_SCOPED_FOLDER.displayPath)
+    assertTrue(TodoListEngine.isTodoFolderAccessGranted(setOf("/ToDo")))
+    assertFalse(TodoListEngine.isTodoFolderAccessGranted(emptySet()))
+
     val activeTask1 = TodoItem(
       id = "t1",
       title = "Prepare electronics kit",
@@ -1033,17 +1089,17 @@ class TodoListTest {
     )
 
     // 1. Single task .text serialization uses tab indentation ('\t') for nested lists with '-' and '+'
-    val expectedTask1Ttxt = listOf(
+    val expectedTask1Text = listOf(
       "- Prepare electronics kit",
       "\t+ Pack multimeter",
       "\t- Charge soldering iron",
       "\t\t- Find USB-C PD cable",
       "\t\t+ Inspect chisel tip",
     ).joinToString("\n")
-    assertEquals(expectedTask1Ttxt, activeTask1.toTtxt())
+    assertEquals(expectedTask1Text, activeTask1.toText())
 
     // 2. Full To Do list .text document includes '# To Do', active '-' tasks, completed '+' tasks, and tab-nested lists
-    val expectedFullTtxt = listOf(
+    val expectedFullText = listOf(
       "# To Do",
       "",
       "- Prepare electronics kit",
@@ -1056,26 +1112,32 @@ class TodoListTest {
       "\t+ Wipe ESD mat",
     ).joinToString("\n")
     assertEquals(
-      expectedFullTtxt,
-      TodoListEngine.formatTodoListToTtxt(
+      expectedFullText,
+      TodoListEngine.formatTodoListToText(
         tasks = listOf(activeTask1, activeTask2),
         completedTasks = listOf(completedTask),
       ),
     )
 
-    // 3. Repository saves and loads .text file on disk, preserving multi-level tab list nesting
-    val tempDir = java.nio.file.Files.createTempDirectory("todo_text_test").toFile()
-    val todoTtxtFile = java.io.File(tempDir, TODO_LIST_TTXT_FILE_NAME)
+    // 3. Repository saves and loads single to-do.text file in /ToDo directory on disk, preserving multi-level tab list nesting
+    val tempRootDir = java.nio.file.Files.createTempDirectory("todo_text_test").toFile()
+    val todoDir = TodoListEngine.getDefaultTodoDirectory(userRoot = tempRootDir)
+    val todoTextFile = TodoListEngine.getDefaultTodoTextFile(userRoot = tempRootDir)
     try {
+      assertEquals(java.io.File(tempRootDir, "ToDo"), todoDir)
+      assertEquals(java.io.File(todoDir, "to-do.text"), todoTextFile)
+
       val repo = InMemoryTodoListRepository(
         initialTasks = listOf(activeTask1, activeTask2),
         initialCompletedTasks = listOf(completedTask),
         completedCount = 1,
-        todoFile = todoTtxtFile,
+        todoDirectory = todoDir,
       )
-      assertTrue(todoTtxtFile.exists())
-      assertEquals(expectedFullTtxt, todoTtxtFile.readText())
-      assertEquals(expectedFullTtxt, repo.toTtxt())
+      assertTrue(todoTextFile.exists())
+      assertEquals(expectedFullText, todoTextFile.readText())
+      assertEquals(expectedFullText, repo.toText())
+      assertEquals(todoDir, repo.getTodoDirectory())
+      assertEquals(todoTextFile, repo.getTodoTextFile())
 
       // Toggle deeply nested subtask 's2-1' ("Find USB-C PD cable") -> '-' becomes '+' at indent level 2 (2 tabs)
       val afterNestedToggle = TodoListEngine.toggleSubTask(repo.loadTasks(), taskId = "t1", subtaskId = "s2-1")
@@ -1093,10 +1155,10 @@ class TodoListTest {
         "+ Clean workbench",
         "\t+ Wipe ESD mat",
       ).joinToString("\n")
-      assertEquals(expectedAfterToggle, todoTtxtFile.readText())
+      assertEquals(expectedAfterToggle, todoTextFile.readText())
 
-      // Load into a fresh repository from the .text file on disk
-      val freshRepo = InMemoryTodoListRepository(todoFile = todoTtxtFile)
+      // Load into a fresh repository from the /ToDo/to-do.text file on disk
+      val freshRepo = InMemoryTodoListRepository(todoDirectory = todoDir)
       val loadedActive = freshRepo.loadTasks()
       val loadedCompleted = freshRepo.loadCompletedTasks()
 
@@ -1119,7 +1181,7 @@ class TodoListTest {
       assertTrue(loadedCompleted[0].subtasks[0].isCompleted)
       assertEquals("Wipe ESD mat", loadedCompleted[0].subtasks[0].title)
     } finally {
-      tempDir.deleteRecursively()
+      tempRootDir.deleteRecursively()
     }
   }
 

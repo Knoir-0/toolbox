@@ -17,13 +17,15 @@ enum class SearchCategoryFilter(
   val toolCategory: ToolCategory? = null,
 ) {
   ALL("All", null),
-  MATH_AND_MEASUREMENT(ToolCategory.MATH_AND_MEASUREMENT.title, ToolCategory.MATH_AND_MEASUREMENT),
+  MATH(ToolCategory.MATH.title, ToolCategory.MATH),
+  FILES(ToolCategory.FILES.title, ToolCategory.FILES),
   PRODUCTIVITY(ToolCategory.PRODUCTIVITY.title, ToolCategory.PRODUCTIVITY),
-  FILES_AND_STORAGE(ToolCategory.FILES_AND_STORAGE.title, ToolCategory.FILES_AND_STORAGE),
-  PHOTO_AND_VIDEO(ToolCategory.PHOTO_AND_VIDEO.title, ToolCategory.PHOTO_AND_VIDEO),
-  AUDIO_AND_SOUND(ToolCategory.AUDIO_AND_SOUND.title, ToolCategory.AUDIO_AND_SOUND),
-  MUSIC_AND_INSTRUMENTS(ToolCategory.MUSIC_AND_INSTRUMENTS.title, ToolCategory.MUSIC_AND_INSTRUMENTS),
-  REMOTES_AND_DEVICES(ToolCategory.REMOTES_AND_DEVICES.title, ToolCategory.REMOTES_AND_DEVICES),
+  MEDIA(ToolCategory.MEDIA.title, ToolCategory.MEDIA),
+  DESIGN(ToolCategory.DESIGN.title, ToolCategory.DESIGN),
+  AUDIO(ToolCategory.AUDIO.title, ToolCategory.AUDIO),
+  DEVICES(ToolCategory.DEVICES.title, ToolCategory.DEVICES),
+  INSTRUMENTS(ToolCategory.INSTRUMENTS.title, ToolCategory.INSTRUMENTS),
+  LIFESTYLE(ToolCategory.LIFESTYLE.title, ToolCategory.LIFESTYLE),
   MISCELLANEOUS(ToolCategory.MISCELLANEOUS.title, ToolCategory.MISCELLANEOUS),
   SYSTEM(ToolCategory.SYSTEM.title, ToolCategory.SYSTEM),
 }
@@ -286,8 +288,8 @@ object SearchEngine {
       summary = "Full-screen image viewer with pinch-to-zoom, OCR text, QR codes & color sampling",
       description = "View images and animated GIFs/WebPs on a full black canvas with pinch-to-zoom, swipeable folder paging, OCR text & QR/barcode inspection, live color reticle sampling, and direct handoff to Image Editor or Colors.",
       capabilities = listOf("Full-Screen Pinch-to-Zoom (100%–500%) & Folder Paging", "OCR Text, QR/Barcode & Smart Tag Recognition Inspector", "Interactive Auto-Focus Color Picker Reticle & Hex Pill", "Animated GIF & WebP Playback Controls", "One-Tap Handoff to Image Editor & Colors"),
-      keywords = listOf("image", "image viewer", "photo viewer", "picture viewer", "zoom", "ocr", "qr", "barcode", "color picker", "gif", "webp", "png", "jpg", "heic"),
-      sampleQueries = listOf("Image", "Image Viewer", "Photo Viewer"),
+      keywords = listOf("viewer", "image", "image viewer", "photo viewer", "picture viewer", "zoom", "ocr", "qr", "barcode", "color picker", "gif", "webp", "png", "jpg", "heic"),
+      sampleQueries = listOf("Viewer", "Image Viewer", "Photo Viewer"),
     ),
     Tool.IMAGE_EDITOR to ToolSearchMetadata(
       tool = Tool.IMAGE_EDITOR,
@@ -492,13 +494,15 @@ object SearchEngine {
    */
   fun categoryFilterForTool(tool: Tool): SearchCategoryFilter {
     return when (tool.category) {
-      ToolCategory.MATH_AND_MEASUREMENT -> SearchCategoryFilter.MATH_AND_MEASUREMENT
+      ToolCategory.MATH -> SearchCategoryFilter.MATH
+      ToolCategory.FILES -> SearchCategoryFilter.FILES
       ToolCategory.PRODUCTIVITY -> SearchCategoryFilter.PRODUCTIVITY
-      ToolCategory.FILES_AND_STORAGE -> SearchCategoryFilter.FILES_AND_STORAGE
-      ToolCategory.PHOTO_AND_VIDEO -> SearchCategoryFilter.PHOTO_AND_VIDEO
-      ToolCategory.AUDIO_AND_SOUND -> SearchCategoryFilter.AUDIO_AND_SOUND
-      ToolCategory.MUSIC_AND_INSTRUMENTS -> SearchCategoryFilter.MUSIC_AND_INSTRUMENTS
-      ToolCategory.REMOTES_AND_DEVICES -> SearchCategoryFilter.REMOTES_AND_DEVICES
+      ToolCategory.MEDIA -> SearchCategoryFilter.MEDIA
+      ToolCategory.DESIGN -> SearchCategoryFilter.DESIGN
+      ToolCategory.AUDIO -> SearchCategoryFilter.AUDIO
+      ToolCategory.DEVICES -> SearchCategoryFilter.DEVICES
+      ToolCategory.INSTRUMENTS -> SearchCategoryFilter.INSTRUMENTS
+      ToolCategory.LIFESTYLE -> SearchCategoryFilter.LIFESTYLE
       ToolCategory.MISCELLANEOUS -> SearchCategoryFilter.MISCELLANEOUS
       ToolCategory.SYSTEM -> SearchCategoryFilter.SYSTEM
     }
@@ -724,7 +728,7 @@ object SearchEngine {
         badgeLabel = "Instant Math",
         tool = Tool.CALCULATOR,
         resultType = SearchResultType.LIVE_CALCULATION,
-        categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+        categoryFilter = SearchCategoryFilter.MATH,
         score = 520,
         copyableValue = evaluated,
         detailRows = listOf(
@@ -830,7 +834,7 @@ object SearchEngine {
             badgeLabel = "Instant Conversion",
             tool = Tool.UNIT_CONVERTER,
             resultType = SearchResultType.LIVE_CONVERSION,
-            categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+            categoryFilter = SearchCategoryFilter.MATH,
             score = 515,
             copyableValue = "$convertedFormatted ${toUnit.symbol}",
             detailRows = listOf(
@@ -860,7 +864,7 @@ object SearchEngine {
         badgeLabel = "Unit Table",
         tool = Tool.UNIT_CONVERTER,
         resultType = SearchResultType.LIVE_CONVERSION,
-        categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+        categoryFilter = SearchCategoryFilter.MATH,
         score = 490,
         copyableValue = "$primaryConverted ${primaryPeer.symbol}",
         detailRows = listOf(
@@ -1084,7 +1088,7 @@ object SearchEngine {
             badgeLabel = "Sound Level",
             tool = Tool.DECIBEL_METER,
             resultType = SearchResultType.DECIBEL_LEVEL,
-            categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+            categoryFilter = SearchCategoryFilter.AUDIO,
             score = 500,
             copyableValue = "${String.format(Locale.US, "%.1f", db)} dB",
             detailRows = listOf(
@@ -1740,7 +1744,7 @@ object SearchEngine {
               badgeLabel = "${category.label} Unit",
               tool = Tool.UNIT_CONVERTER,
               resultType = SearchResultType.UNIT,
-              categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+              categoryFilter = SearchCategoryFilter.MATH,
               score = score,
               detailRows = listOf(
                 SearchResultDetailRow("Unit Name", unit.name),
@@ -1787,7 +1791,7 @@ object SearchEngine {
             badgeLabel = "Ruler Reference",
             tool = Tool.RULER,
             resultType = SearchResultType.RULER_REFERENCE,
-            categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+            categoryFilter = SearchCategoryFilter.MATH,
             score = score,
             copyableValue = mmText,
             detailRows = listOf(
@@ -1820,7 +1824,7 @@ object SearchEngine {
             badgeLabel = "Ruler Mode",
             tool = Tool.RULER,
             resultType = SearchResultType.RULER_REFERENCE,
-            categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+            categoryFilter = SearchCategoryFilter.MATH,
             score = score,
           )
         )
@@ -1852,7 +1856,7 @@ object SearchEngine {
         badgeLabel = "dB Classification",
         tool = Tool.DECIBEL_METER,
         resultType = SearchResultType.DECIBEL_LEVEL,
-        categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+        categoryFilter = SearchCategoryFilter.AUDIO,
         score = score,
         detailRows = listOf(
           SearchResultDetailRow("Noise Category", category.label),

@@ -79,16 +79,16 @@ data class NoteChecklistItem(
   /**
    * Internal `.text` list marker: `-` when unchecked, `+` when checked.
    */
-  val ttxtPrefix: Char
+  val textPrefix: Char
     get() = if (isChecked) '+' else '-'
 
   /**
    * Formats this item as a `.text` checklist line (`- <text>` for unchecked, `+ <text>` for checked),
    * indented by 1 tab (`\t`) per [indentLevel] to denote checklist nesting.
    */
-  fun toTtxtLine(): String {
+  fun toTextLine(): String {
     val indent = "\t".repeat(indentLevel.coerceAtLeast(0))
-    return "$indent$ttxtPrefix ${text.trim()}"
+    return "$indent$textPrefix ${text.trim()}"
   }
 
   fun toJson(): JSONObject = JSONObject().apply {
@@ -98,15 +98,15 @@ data class NoteChecklistItem(
     if (indentLevel > 0) {
       put("indentLevel", indentLevel)
     }
-    put("ttxtLine", toTtxtLine())
+    put("textLine", toTextLine())
   }
 
   companion object {
-    fun fromTtxtLine(
+    fun fromTextLine(
       rawLine: String,
       id: String = UUID.randomUUID().toString(),
     ): NoteChecklistItem? {
-      val indentLevel = NotesEngine.parseTtxtIndentLevel(rawLine)
+      val indentLevel = NotesEngine.parseTextIndentLevel(rawLine)
       val trimmed = rawLine.trim()
       if (trimmed.isEmpty()) return null
       return when {
@@ -128,9 +128,9 @@ data class NoteChecklistItem(
 
     fun fromJson(json: JSONObject): NoteChecklistItem {
       val itemId = json.optString("id", UUID.randomUUID().toString())
-      val rawTtxtLine = json.optString("ttxtLine", "")
-      if (rawTtxtLine.isNotBlank() && !json.has("text")) {
-        fromTtxtLine(rawTtxtLine, id = itemId)?.let { return it }
+      val rawTextLine = json.optString("textLine", "")
+      if (rawTextLine.isNotBlank() && !json.has("text")) {
+        fromTextLine(rawTextLine, id = itemId)?.let { return it }
       }
       return NoteChecklistItem(
         id = itemId,
@@ -180,7 +180,7 @@ data class NoteItem(
    * - For text notes ([isChecklist] = `false`), Markdown body text.
    * - Labels on the last line as a `#Label Name 1, #Label Name 2, ...` CSV list when [labels] is non-empty.
    */
-  fun toTtxt(): String = NotesEngine.formatNoteToTtxt(this)
+  fun toText(): String = NotesEngine.formatNoteToText(this)
 
   /**
    * Formats the note into `.text`-based plain text suitable for copying to clipboard or sharing,
@@ -188,9 +188,9 @@ data class NoteItem(
    */
   fun toPlainText(): String {
     val sb = StringBuilder()
-    val ttxtBody = NotesEngine.formatNoteToTtxt(this, includeLabels = false)
-    if (ttxtBody.isNotEmpty()) {
-      sb.append(ttxtBody)
+    val textBody = NotesEngine.formatNoteToText(this, includeLabels = false)
+    if (textBody.isNotEmpty()) {
+      sb.append(textBody)
     }
     val cleanedLabels = labels
       .map { NotesEngine.normalizeLabelName(it) }
@@ -211,7 +211,7 @@ data class NoteItem(
     val checklistArray = JSONArray()
     checklistItems.forEach { checklistArray.put(it.toJson()) }
     put("checklistItems", checklistArray)
-    put("ttxt", toTtxt())
+    put("text", toText())
     put("format", NOTES_FILE_EXTENSION)
     put("color", color.name)
     put("isPinned", isPinned)
@@ -225,14 +225,14 @@ data class NoteItem(
   }
 
   companion object {
-    fun fromTtxt(
-      rawTtxt: String,
+    fun fromText(
+      rawText: String,
       fallbackTitle: String = "",
       id: String = UUID.randomUUID().toString(),
       nowMs: Long = System.currentTimeMillis(),
       forceChecklist: Boolean? = null,
-    ): NoteItem = NotesEngine.parseNoteFromTtxt(
-      rawTtxt = rawTtxt,
+    ): NoteItem = NotesEngine.parseNoteFromText(
+      rawText = rawText,
       fallbackTitle = fallbackTitle,
       id = id,
       nowMs = nowMs,
@@ -274,10 +274,10 @@ data class NoteItem(
       val updated = json.optLong("updatedAt", created)
       val id = json.optString("id", UUID.randomUUID().toString())
       val hasExplicitFields = json.has("title") || json.has("content") || checklistArray != null
-      val rawTtxt = json.optString("ttxt", "")
-      if (!hasExplicitFields && rawTtxt.isNotEmpty()) {
-        val parsed = fromTtxt(
-          rawTtxt = rawTtxt,
+      val rawText = json.optString("text", "")
+      if (!hasExplicitFields && rawText.isNotEmpty()) {
+        val parsed = fromText(
+          rawText = rawText,
           id = id,
           nowMs = updated,
           forceChecklist = if (json.has("isChecklist")) json.optBoolean("isChecklist") else null,
@@ -397,7 +397,7 @@ class InMemoryNotesRepository(
       } else if (notesDirectory.exists()) {
         val loaded = NotesEngine.loadNotesFromDirectory(notesDirectory)
         notes.addAll(loaded)
-        fileNamesByNoteId.putAll(NotesEngine.assignTtxtFileNames(loaded))
+        fileNamesByNoteId.putAll(NotesEngine.assignTextFileNames(loaded))
       }
     }
   }
@@ -405,8 +405,8 @@ class InMemoryNotesRepository(
   override fun loadNotes(): List<NoteItem> {
     val dir = notesDirectory
     if (dir != null && dir.exists()) {
-      val ttxtFiles = dir.listFiles { f -> NotesEngine.isNoteTtxtFile(f) }
-      if (ttxtFiles != null && (ttxtFiles.isNotEmpty() || notes.isEmpty())) {
+      val textFiles = dir.listFiles { f -> NotesEngine.isNoteTextFile(f) }
+      if (textFiles != null && (textFiles.isNotEmpty() || notes.isEmpty())) {
         val synced = NotesEngine.loadNotesFromDirectory(
           directory = dir,
           metadataNotes = notes.toList(),
@@ -500,7 +500,7 @@ class SharedPreferencesNotesRepository(
         } else {
           // SharedPreferences was cleared and /Notes access is not granted: remove stale managed .text files
           try {
-            dir.listFiles { f -> NotesEngine.isNoteTtxtFile(f) }?.forEach { it.delete() }
+            dir.listFiles { f -> NotesEngine.isNoteTextFile(f) }?.forEach { it.delete() }
           } catch (_: Throwable) {}
         }
       }
@@ -528,13 +528,13 @@ class SharedPreferencesNotesRepository(
 
     if (dir != null) {
       try {
-        val existingTtxtFiles = if (dir.exists()) {
-          dir.listFiles { f -> NotesEngine.isNoteTtxtFile(f) }?.toList().orEmpty()
+        val existingTextFiles = if (dir.exists()) {
+          dir.listFiles { f -> NotesEngine.isNoteTextFile(f) }?.toList().orEmpty()
         } else {
           emptyList()
         }
 
-        return if (existingTtxtFiles.isEmpty()) {
+        return if (existingTextFiles.isEmpty()) {
           if (metadataNotes.isNotEmpty()) {
             NotesEngine.saveNotesToDirectory(metadataNotes, dir)
           }
@@ -555,7 +555,7 @@ class SharedPreferencesNotesRepository(
   }
 
   override fun saveNotes(notes: List<NoteItem>) {
-    val assignedFileNames = NotesEngine.assignTtxtFileNames(notes)
+    val assignedFileNames = NotesEngine.assignTextFileNames(notes)
     val dir = notesDirectory
     if (dir != null) {
       try {
@@ -662,20 +662,21 @@ object NotesEngine {
 
   val DEFAULT_NOTES_FOLDER: NotesFolder = DEFAULT_NOTES_SCOPED_FOLDER
 
-  private val RESERVED_TODO_TTXT_FILES = setOf(
-    TODO_LIST_TTXT_FILE_NAME.lowercase(Locale.ROOT),
-    TODO_COMPLETED_TTXT_FILE_NAME.lowercase(Locale.ROOT),
-    TODO_SAVED_TTXT_FILE_NAME.lowercase(Locale.ROOT),
+  private val RESERVED_TODO_TEXT_FILES = setOf(
+    TODO_LIST_TEXT_FILE_NAME.lowercase(Locale.ROOT),
+    "todo_list.text",
+    TODO_COMPLETED_TEXT_FILE_NAME.lowercase(Locale.ROOT),
+    TODO_SAVED_TEXT_FILE_NAME.lowercase(Locale.ROOT),
   )
 
-  fun isNoteTtxtFile(file: File): Boolean {
+  fun isNoteTextFile(file: File): Boolean {
     return file.isFile &&
       file.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true) &&
-      file.name.lowercase(Locale.ROOT) !in RESERVED_TODO_TTXT_FILES
+      file.name.lowercase(Locale.ROOT) !in RESERVED_TODO_TEXT_FILES
   }
 
-  private val TTXT_UNCHECKED_LINE_REGEX = Regex("""^([ \t]*)-\s+(.+)$""")
-  private val TTXT_CHECKED_LINE_REGEX = Regex("""^([ \t]*)\+\s+(.+)$""")
+  private val TEXT_UNCHECKED_LINE_REGEX = Regex("""^([ \t]*)-\s+(.+)$""")
+  private val TEXT_CHECKED_LINE_REGEX = Regex("""^([ \t]*)\+\s+(.+)$""")
 
   data class PendingQuickCaptureRequest(
     val isChecklist: Boolean,
@@ -749,7 +750,7 @@ object NotesEngine {
    * Each leading tab character (`\t`) denotes 1 nesting level (with every 2 leading spaces also
    * accepted as 1 nesting level for backwards compatibility).
    */
-  fun parseTtxtIndentLevel(rawLine: String): Int {
+  fun parseTextIndentLevel(rawLine: String): Int {
     val leadingWhitespace = rawLine.takeWhile { it == ' ' || it == '\t' }
     val tabCount = leadingWhitespace.count { it == '\t' }
     val spaceCount = leadingWhitespace.count { it == ' ' }
@@ -768,7 +769,7 @@ object NotesEngine {
    * Formats a list of labels into the internal `.text` CSV footer line:
    * `#Label Name 1, #Label Name 2, ...`
    */
-  fun formatLabelsToTtxtLine(labels: List<String>): String {
+  fun formatLabelsToTextLine(labels: List<String>): String {
     return labels
       .map { normalizeLabelName(it) }
       .filter { it.isNotEmpty() }
@@ -783,7 +784,7 @@ object NotesEngine {
    * Note: Markdown headings use `# <Title>` (with a space after `#`), whereas `.text` label tokens
    * start directly with `#<LabelName>` (no space immediately following `#`) and are comma-separated.
    */
-  fun parseLabelsFromTtxtLine(rawLine: String): List<String>? {
+  fun parseLabelsFromTextLine(rawLine: String): List<String>? {
     val trimmed = rawLine.trim()
     if (!trimmed.startsWith("#")) return null
     val tokens = trimmed.split(',').map { it.trim() }
@@ -809,7 +810,7 @@ object NotesEngine {
    * - Labels on the last line as a `#Label Name 1, #Label Name 2, ...` CSV list when [includeLabels]
    *   is `true` and [NoteItem.labels] is non-empty.
    */
-  fun formatNoteToTtxt(
+  fun formatNoteToText(
     note: NoteItem,
     includeLabels: Boolean = true,
   ): String {
@@ -821,7 +822,7 @@ object NotesEngine {
       val validItems = note.checklistItems.filter { it.text.isNotBlank() }
       if (validItems.isNotEmpty()) {
         if (sb.isNotEmpty()) sb.append("\n\n")
-        val lines = validItems.map { it.toTtxtLine() }
+        val lines = validItems.map { it.toTextLine() }
         sb.append(lines.joinToString("\n"))
       }
     } else {
@@ -831,7 +832,7 @@ object NotesEngine {
       }
     }
     if (includeLabels) {
-      val labelsLine = formatLabelsToTtxtLine(note.labels)
+      val labelsLine = formatLabelsToTextLine(note.labels)
       if (labelsLine.isNotEmpty()) {
         if (sb.isNotEmpty()) sb.append("\n\n")
         sb.append(labelsLine)
@@ -847,15 +848,15 @@ object NotesEngine {
    *   (stripping the internal `#` prefixes so they are never shown in the UI).
    * - Recognizes `.text` checklists where unchecked items use `- <item>` and checked items use `+ <item>`.
    */
-  fun parseNoteFromTtxt(
-    rawTtxt: String,
+  fun parseNoteFromText(
+    rawText: String,
     fallbackTitle: String = "",
     id: String = UUID.randomUUID().toString(),
     nowMs: Long = System.currentTimeMillis(),
     forceChecklist: Boolean? = null,
     existingChecklistItems: List<NoteChecklistItem> = emptyList(),
   ): NoteItem {
-    val normalized = rawTtxt.replace("\r\n", "\n").replace('\r', '\n')
+    val normalized = rawText.replace("\r\n", "\n").replace('\r', '\n')
     val lines = normalized.split('\n')
     val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
     if (firstNonBlankIdx == -1) {
@@ -869,7 +870,7 @@ object NotesEngine {
     }
 
     val lastNonBlankIdx = lines.indexOfLast { it.isNotBlank() }
-    val trailingLabels = parseLabelsFromTtxtLine(lines[lastNonBlankIdx])
+    val trailingLabels = parseLabelsFromTextLine(lines[lastNonBlankIdx])
     val contentLines = if (trailingLabels != null) {
       lines.subList(0, lastNonBlankIdx)
     } else {
@@ -908,22 +909,22 @@ object NotesEngine {
     }
 
     val nonBlankBodyLines = trimmedBodyLines.filter { it.isNotBlank() }
-    val allTtxtChecklistLines = nonBlankBodyLines.isNotEmpty() && nonBlankBodyLines.all { line ->
-      TTXT_UNCHECKED_LINE_REGEX.matches(line) || TTXT_CHECKED_LINE_REGEX.matches(line)
+    val allTextChecklistLines = nonBlankBodyLines.isNotEmpty() && nonBlankBodyLines.all { line ->
+      TEXT_UNCHECKED_LINE_REGEX.matches(line) || TEXT_CHECKED_LINE_REGEX.matches(line)
     }
 
     val isChecklist = when (forceChecklist) {
       true -> true
       false -> false
-      null -> allTtxtChecklistLines
+      null -> allTextChecklistLines
     }
 
     return if (isChecklist) {
       val remainingExisting = existingChecklistItems.toMutableList()
       val items = nonBlankBodyLines.mapNotNull { rawLine ->
-        val checkedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(rawLine)
-        val uncheckedMatch = if (checkedMatch == null) TTXT_UNCHECKED_LINE_REGEX.matchEntire(rawLine) else null
-        val indentLevel = parseTtxtIndentLevel(rawLine)
+        val checkedMatch = TEXT_CHECKED_LINE_REGEX.matchEntire(rawLine)
+        val uncheckedMatch = if (checkedMatch == null) TEXT_UNCHECKED_LINE_REGEX.matchEntire(rawLine) else null
+        val indentLevel = parseTextIndentLevel(rawLine)
         val (itemText, isChecked) = when {
           checkedMatch != null -> checkedMatch.groupValues[2].trim() to true
           uncheckedMatch != null -> uncheckedMatch.groupValues[2].trim() to false
@@ -980,7 +981,7 @@ object NotesEngine {
   /**
    * Builds a unique, filesystem-safe `.text` filename for [note].
    */
-  fun buildTtxtFileName(
+  fun buildTextFileName(
     note: NoteItem,
     usedFileNamesLower: MutableSet<String> = mutableSetOf(),
   ): String {
@@ -1014,11 +1015,11 @@ object NotesEngine {
    * Assigns deterministic, collision-free `.text` filenames for a list of [notes],
    * returning a map of `note.id -> fileName`.
    */
-  fun assignTtxtFileNames(notes: List<NoteItem>): Map<String, String> {
+  fun assignTextFileNames(notes: List<NoteItem>): Map<String, String> {
     val usedLower = mutableSetOf<String>()
     val result = LinkedHashMap<String, String>(notes.size)
     for (note in notes) {
-      result[note.id] = buildTtxtFileName(note, usedLower)
+      result[note.id] = buildTextFileName(note, usedLower)
     }
     return result
   }
@@ -1030,17 +1031,17 @@ object NotesEngine {
   fun saveNotesToDirectory(
     notes: List<NoteItem>,
     directory: File,
-    fileNamesByNoteId: Map<String, String> = assignTtxtFileNames(notes),
+    fileNamesByNoteId: Map<String, String> = assignTextFileNames(notes),
   ): Map<String, String> {
     if (!directory.exists()) {
       directory.mkdirs()
     }
     val activeNamesLower = mutableSetOf<String>()
     for (note in notes) {
-      val fileName = fileNamesByNoteId[note.id] ?: buildTtxtFileName(note, activeNamesLower)
+      val fileName = fileNamesByNoteId[note.id] ?: buildTextFileName(note, activeNamesLower)
       activeNamesLower.add(fileName.lowercase(Locale.ROOT))
       val targetFile = File(directory, fileName)
-      targetFile.writeText(formatNoteToTtxt(note))
+      targetFile.writeText(formatNoteToText(note))
       try {
         if (note.updatedAt > 0L) {
           targetFile.setLastModified(note.updatedAt)
@@ -1048,7 +1049,7 @@ object NotesEngine {
       } catch (_: Throwable) {}
     }
 
-    directory.listFiles { f -> isNoteTtxtFile(f) }?.forEach { existingFile ->
+    directory.listFiles { f -> isNoteTextFile(f) }?.forEach { existingFile ->
       if (existingFile.name.lowercase(Locale.ROOT) !in activeNamesLower) {
         try {
           existingFile.delete()
@@ -1071,16 +1072,16 @@ object NotesEngine {
     if (!directory.exists() || !directory.isDirectory) {
       return metadataNotes
     }
-    val ttxtFiles = directory.listFiles { f -> isNoteTtxtFile(f) }?.toList().orEmpty()
+    val textFiles = directory.listFiles { f -> isNoteTextFile(f) }?.toList().orEmpty()
 
-    if (ttxtFiles.isEmpty()) {
+    if (textFiles.isEmpty()) {
       return emptyList()
     }
 
     val effectiveFileNames = if (fileNameByNoteId.isNotEmpty()) {
       fileNameByNoteId
     } else if (metadataNotes.isNotEmpty()) {
-      assignTtxtFileNames(metadataNotes)
+      assignTextFileNames(metadataNotes)
     } else {
       emptyMap()
     }
@@ -1092,7 +1093,7 @@ object NotesEngine {
     val matchedNotesById = LinkedHashMap<String, NoteItem>()
     val unmatchedExternalNotes = mutableListOf<NoteItem>()
 
-    for (file in ttxtFiles.sortedByDescending { it.lastModified() }) {
+    for (file in textFiles.sortedByDescending { it.lastModified() }) {
       val rawText = try {
         file.readText()
       } catch (_: Throwable) {
@@ -1115,10 +1116,10 @@ object NotesEngine {
         else -> file.nameWithoutExtension
       }
       val fileTimestamp = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
-      val parsed = parseNoteFromTtxt(
-        rawTtxt = rawText,
+      val parsed = parseNoteFromText(
+        rawText = rawText,
         fallbackTitle = fallbackTitle,
-        id = meta?.id ?: "ttxt_${file.nameWithoutExtension.hashCode()}_$fileTimestamp",
+        id = meta?.id ?: "text_${file.nameWithoutExtension.hashCode()}_$fileTimestamp",
         nowMs = meta?.updatedAt ?: fileTimestamp,
         forceChecklist = if (rawText.trim().let { !it.contains('\n') && it.startsWith("#") } && meta != null) {
           meta.isChecklist
@@ -1334,7 +1335,7 @@ object NotesEngine {
     return rawText
       .split(Regex("\\r\\n|\\n|\\r"))
       .mapNotNull { rawLine ->
-        val indentLevel = parseTtxtIndentLevel(rawLine)
+        val indentLevel = parseTextIndentLevel(rawLine)
         val line = rawLine.trim()
         if (line.isEmpty()) {
           null

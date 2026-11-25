@@ -17,11 +17,13 @@ import java.io.File
 @Composable
 fun MainNavigation(
   standaloneTool: Tool? = null,
+  initialFile: File? = null,
   initialDirectory: File? = null,
   initialExpandMusicPlayer: Boolean = false,
 ) {
   val backStack = rememberNavBackStack(Main)
   val currentStandaloneTool by rememberUpdatedState(standaloneTool)
+  val currentInitialFile by rememberUpdatedState(initialFile)
   val currentInitialDirectory by rememberUpdatedState(initialDirectory)
   val currentInitialExpandMusicPlayer by rememberUpdatedState(initialExpandMusicPlayer)
 
@@ -33,6 +35,7 @@ fun MainNavigation(
         entry<Main> {
           MainScreen(
             standaloneTool = currentStandaloneTool,
+            initialFile = currentInitialFile,
             initialDirectory = currentInitialDirectory,
             initialExpandMusicPlayer = currentInitialExpandMusicPlayer,
             onItemClick = { navKey -> backStack.add(navKey) },

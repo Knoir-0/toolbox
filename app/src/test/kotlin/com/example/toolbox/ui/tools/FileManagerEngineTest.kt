@@ -715,7 +715,7 @@ class FileManagerEngineTest {
     )
     assertEquals(2, repo.loadNotes().size)
 
-    val ttxtFile = File(tempFolder.root, "ToolboxChecklist.text").apply {
+    val textFile = File(tempFolder.root, "ToolboxChecklist.text").apply {
       writeText(
         """
         # Toolbox Checklist
@@ -725,17 +725,17 @@ class FileManagerEngineTest {
         """.trimIndent()
       )
     }
-    assertTrue(FileManagerEngine.isTextFile(ttxtFile))
-    assertEquals("text/plain", FileManagerEngine.getMimeType(ttxtFile))
-    val importedTtxt = FileManagerEngine.importFileToNotes(ttxtFile, repo, nowMs = 1_700_000_010_000L)
-    assertNotNull(importedTtxt)
-    assertEquals("Toolbox Checklist", importedTtxt!!.title)
-    assertTrue(importedTtxt.isChecklist)
-    assertEquals(2, importedTtxt.checklistItems.size)
-    assertFalse(importedTtxt.checklistItems[0].isChecked)
-    assertEquals("Unchecked item", importedTtxt.checklistItems[0].text)
-    assertTrue(importedTtxt.checklistItems[1].isChecked)
-    assertEquals("Checked item", importedTtxt.checklistItems[1].text)
+    assertTrue(FileManagerEngine.isTextFile(textFile))
+    assertEquals("text/plain", FileManagerEngine.getMimeType(textFile))
+    val importedText = FileManagerEngine.importFileToNotes(textFile, repo, nowMs = 1_700_000_010_000L)
+    assertNotNull(importedText)
+    assertEquals("Toolbox Checklist", importedText!!.title)
+    assertTrue(importedText.isChecklist)
+    assertEquals(2, importedText.checklistItems.size)
+    assertFalse(importedText.checklistItems[0].isChecked)
+    assertEquals("Unchecked item", importedText.checklistItems[0].text)
+    assertTrue(importedText.checklistItems[1].isChecked)
+    assertEquals("Checked item", importedText.checklistItems[1].text)
     assertEquals(3, repo.loadNotes().size)
   }
 

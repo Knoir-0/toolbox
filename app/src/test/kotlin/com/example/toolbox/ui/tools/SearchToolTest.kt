@@ -155,12 +155,12 @@ class SearchToolTest {
     val allResults = SearchEngine.search("c")
     assertTrue(allResults.isNotEmpty())
 
-    val mathAndMeasureOnly = SearchEngine.search(
+    val mathOnly = SearchEngine.search(
       query = "c",
-      categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
+      categoryFilter = SearchCategoryFilter.MATH,
     )
-    assertTrue(mathAndMeasureOnly.isNotEmpty())
-    assertTrue(mathAndMeasureOnly.all { it.tool.category == SearchCategoryFilter.MATH_AND_MEASUREMENT.toolCategory })
+    assertTrue(mathOnly.isNotEmpty())
+    assertTrue(mathOnly.all { it.tool.category == SearchCategoryFilter.MATH.toolCategory })
 
     val chordBookOnly = SearchEngine.search(
       query = "Dorian",

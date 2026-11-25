@@ -1878,7 +1878,7 @@ object FileManagerEngine {
   // =========================================================================
 
   private val CHECKBOX_LINE_REGEX = Regex("""^\s*(?:[-*•]|\d+\.)?\s*\[([ xX])]\s*(.+)$""")
-  private val TTXT_CHECKED_LINE_REGEX = Regex("""^\s*\+\s+(.+)$""")
+  private val TEXT_CHECKED_LINE_REGEX = Regex("""^\s*\+\s+(.+)$""")
   private val BULLET_LINE_REGEX = Regex("""^\s*(?:[-*•]|\d+\.)\s+(.+)$""")
 
   /**
@@ -1899,13 +1899,13 @@ object FileManagerEngine {
     val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
     if (firstNonBlankIdx == -1) return null
     val lastNonBlankIdx = lines.indexOfLast { it.isNotBlank() }
-    val trailingTtxtLabels = NotesEngine.parseLabelsFromTtxtLine(lines[lastNonBlankIdx])
-    val contentLines = if (trailingTtxtLabels != null) {
+    val trailingTextLabels = NotesEngine.parseLabelsFromTextLine(lines[lastNonBlankIdx])
+    val contentLines = if (trailingTextLabels != null) {
       lines.subList(0, lastNonBlankIdx)
     } else {
       lines
     }
-    val importedLabels = (trailingTtxtLabels.orEmpty() + "Files")
+    val importedLabels = (trailingTextLabels.orEmpty() + "Files")
       .map { NotesEngine.normalizeLabelName(it) }
       .filter { it.isNotEmpty() }
       .distinct()
@@ -1923,28 +1923,28 @@ object FileManagerEngine {
       bodyLines = contentLines
     }
 
-    val isTtxtFile = file.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
+    val isTextFile = file.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
     val nonBlankBody = bodyLines.map { it.trim() }.filter { it.isNotEmpty() }
     val hasCheckboxLines = nonBlankBody.any {
-      CHECKBOX_LINE_REGEX.matches(it) || TTXT_CHECKED_LINE_REGEX.matches(it)
-    } || (isTtxtFile && nonBlankBody.isNotEmpty() && nonBlankBody.all {
-      BULLET_LINE_REGEX.matches(it) || TTXT_CHECKED_LINE_REGEX.matches(it)
+      CHECKBOX_LINE_REGEX.matches(it) || TEXT_CHECKED_LINE_REGEX.matches(it)
+    } || (isTextFile && nonBlankBody.isNotEmpty() && nonBlankBody.all {
+      BULLET_LINE_REGEX.matches(it) || TEXT_CHECKED_LINE_REGEX.matches(it)
     })
     val allChecklistCompatible = nonBlankBody.isNotEmpty() && nonBlankBody.all { line ->
-      CHECKBOX_LINE_REGEX.matches(line) || TTXT_CHECKED_LINE_REGEX.matches(line) || BULLET_LINE_REGEX.matches(line)
+      CHECKBOX_LINE_REGEX.matches(line) || TEXT_CHECKED_LINE_REGEX.matches(line) || BULLET_LINE_REGEX.matches(line)
     }
 
     return if (hasCheckboxLines && allChecklistCompatible) {
       val checklistItems = bodyLines.filter { it.isNotBlank() }.mapIndexed { idx, rawLine ->
-        val indentLevel = NotesEngine.parseTtxtIndentLevel(rawLine)
+        val indentLevel = NotesEngine.parseTextIndentLevel(rawLine)
         val line = rawLine.trim()
-        val ttxtCheckedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(line)
-        val checkboxMatch = if (ttxtCheckedMatch == null) CHECKBOX_LINE_REGEX.matchEntire(line) else null
+        val textCheckedMatch = TEXT_CHECKED_LINE_REGEX.matchEntire(line)
+        val checkboxMatch = if (textCheckedMatch == null) CHECKBOX_LINE_REGEX.matchEntire(line) else null
         when {
-          ttxtCheckedMatch != null -> {
+          textCheckedMatch != null -> {
             NoteChecklistItem(
               id = "file_chk_${nowMs}_$idx",
-              text = ttxtCheckedMatch.groupValues[1].trim(),
+              text = textCheckedMatch.groupValues[1].trim(),
               isChecked = true,
               indentLevel = indentLevel,
             )
@@ -2038,13 +2038,13 @@ object FileManagerEngine {
     val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
     if (firstNonBlankIdx == -1) return null
     val lastNonBlankIdx = lines.indexOfLast { it.isNotBlank() }
-    val trailingTtxtLabels = NotesEngine.parseLabelsFromTtxtLine(lines[lastNonBlankIdx])
-    val contentLines = if (trailingTtxtLabels != null) {
+    val trailingTextLabels = NotesEngine.parseLabelsFromTextLine(lines[lastNonBlankIdx])
+    val contentLines = if (trailingTextLabels != null) {
       lines.subList(0, lastNonBlankIdx)
     } else {
       lines
     }
-    val importedLabels = (trailingTtxtLabels.orEmpty() + "Files")
+    val importedLabels = (trailingTextLabels.orEmpty() + "Files")
       .map { NotesEngine.normalizeLabelName(it) }
       .filter { it.isNotEmpty() }
       .distinct()
@@ -2066,20 +2066,20 @@ object FileManagerEngine {
     if (title.isBlank() && nonBlankBody.isEmpty()) return null
 
     val hasStructuredList = nonBlankBody.any {
-      CHECKBOX_LINE_REGEX.matches(it) || TTXT_CHECKED_LINE_REGEX.matches(it) || BULLET_LINE_REGEX.matches(it)
+      CHECKBOX_LINE_REGEX.matches(it) || TEXT_CHECKED_LINE_REGEX.matches(it) || BULLET_LINE_REGEX.matches(it)
     }
 
     val subtasks: List<TodoSubTask>
     val notes: String
 
     if (hasStructuredList || nonBlankBody.size > 1) {
-      val hasNestedTtxtLines = bodyLines.any { rawLine ->
+      val hasNestedTextLines = bodyLines.any { rawLine ->
         val leadingSpaces = rawLine.takeWhile { it == ' ' || it == '\t' }.replace("\t", "  ").length
         leadingSpaces >= 2 && (rawLine.trimStart().startsWith("- ") || rawLine.trimStart().startsWith("+ "))
       }
-      if (hasNestedTtxtLines) {
-        val parsed = TodoListEngine.parseTaskFromTtxt(
-          rawTtxt = "# ${title.ifBlank { "Imported Task" }}\n\n${bodyLines.joinToString("\n")}",
+      if (hasNestedTextLines) {
+        val parsed = TodoListEngine.parseTaskFromText(
+          rawText = "# ${title.ifBlank { "Imported Task" }}\n\n${bodyLines.joinToString("\n")}",
           id = "todo_from_file_${nowMs}_${file.name.hashCode()}",
           nowMs = nowMs,
         )
@@ -2088,13 +2088,13 @@ object FileManagerEngine {
         subtasks = nonBlankBody.mapIndexedNotNull { idx, line ->
           val cleanLine = line.removePrefix("#").trim()
           if (cleanLine.isEmpty()) return@mapIndexedNotNull null
-          val ttxtCheckedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(line)
-          val checkboxMatch = if (ttxtCheckedMatch == null) CHECKBOX_LINE_REGEX.matchEntire(line) else null
+          val textCheckedMatch = TEXT_CHECKED_LINE_REGEX.matchEntire(line)
+          val checkboxMatch = if (textCheckedMatch == null) CHECKBOX_LINE_REGEX.matchEntire(line) else null
           when {
-            ttxtCheckedMatch != null -> {
+            textCheckedMatch != null -> {
               TodoSubTask(
                 id = "todo_sub_${nowMs}_$idx",
-                title = ttxtCheckedMatch.groupValues[1].trim(),
+                title = textCheckedMatch.groupValues[1].trim(),
                 isCompleted = true,
               )
             }

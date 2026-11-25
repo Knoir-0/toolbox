@@ -43,37 +43,37 @@ class NavigationPreferencesTest {
       Tool.CALCULATOR,
       Tool.NOTES,
       Tool.TODO_LIST,
+      Tool.CALENDAR,
       Tool.CAMERA,
       Tool.GALLERY,
       Tool.FILES,
-      Tool.UNIT_CONVERTER,
-      Tool.RULER,
-      Tool.AUDIO_RECORDER,
       Tool.MUSIC,
-      Tool.BLUETOOTH_REMOTE,
-      Tool.BLUETOOTH_GAMEPAD,
-      Tool.GUITAR_TUNER,
-      Tool.CHORD_BOOK,
+      Tool.AUDIO_RECORDER,
+      Tool.RULER,
       Tool.RECIPES,
       Tool.PLANT_SCHEDULE,
+      Tool.GUITAR_TUNER,
+      Tool.CHORD_BOOK,
+      Tool.BLUETOOTH_REMOTE,
       Tool.DICE_ROLLER,
+      Tool.GOOD,
+      Tool.SEARCH,
+      Tool.UNIT_CONVERTER,
+      Tool.DECIBEL_METER,
+      Tool.ELEMENTS,
+      Tool.FILE_CONVERTER,
+      Tool.PDF_VIEWER,
+      Tool.ARCHIVE,
       Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.SCREEN_RECORDER,
-      Tool.AUDIO_EDITOR,
-      Tool.FILE_CONVERTER,
-      Tool.PDF_VIEWER,
-      Tool.ARCHIVE,
-      Tool.DECIBEL_METER,
-      Tool.METRONOME,
       Tool.COLOR_PICKER,
+      Tool.AUDIO_EDITOR,
+      Tool.METRONOME,
+      Tool.BLUETOOTH_GAMEPAD,
       Tool.OBD2_SCANNER,
-      Tool.ELEMENTS,
-      Tool.GOOD,
       Tool.STARS,
-      Tool.CALENDAR,
-      Tool.SEARCH,
       Tool.TERMINAL,
       Tool.SETTINGS,
     )
@@ -378,22 +378,24 @@ class NavigationPreferencesTest {
   fun hiddenTools_fileConverterImageEditorVideoEditorAudioEditorAndDecibelMeterAreHiddenByDefault_andCanBeUnhidden() {
     val expectedDefaultHidden = setOf(
       Tool.UNIT_CONVERTER,
+      Tool.DECIBEL_METER,
+      Tool.ELEMENTS,
       Tool.FILE_CONVERTER,
+      Tool.PDF_VIEWER,
+      Tool.ARCHIVE,
       Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.SCREEN_RECORDER,
-      Tool.AUDIO_EDITOR,
-      Tool.DECIBEL_METER,
-      Tool.ARCHIVE,
-      Tool.PDF_VIEWER,
-      Tool.METRONOME,
       Tool.COLOR_PICKER,
+      Tool.AUDIO_EDITOR,
+      Tool.METRONOME,
+      Tool.BLUETOOTH_GAMEPAD,
       Tool.OBD2_SCANNER,
-      Tool.ELEMENTS,
+      Tool.STARS,
       Tool.TERMINAL,
     )
-    // Null rawString (no saved preference) returns DEFAULT_HIDDEN_TOOLS containing FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR, AUDIO_EDITOR, DECIBEL_METER
+    // Null rawString (no saved preference) returns DEFAULT_HIDDEN_TOOLS
     assertEquals(expectedDefaultHidden, DEFAULT_HIDDEN_TOOLS)
     assertEquals(DEFAULT_HIDDEN_TOOLS, parseHiddenTools(null))
     // Explicit blank string (user unhid all tools) returns emptySet()
@@ -620,10 +622,10 @@ class NavigationPreferencesTest {
   @Test
   fun sortCategoryGroups_manualAlphaAndUsage_keepsSystemLast() {
     val groups = listOf(
-      CategoryGroup(ToolCategory.MISCELLANEOUS, listOf(Tool.PLANT_SCHEDULE, Tool.DICE_ROLLER)),
+      CategoryGroup(ToolCategory.LIFESTYLE, listOf(Tool.PLANT_SCHEDULE, Tool.RECIPES)),
       CategoryGroup(ToolCategory.SYSTEM, listOf(Tool.SETTINGS)),
-      CategoryGroup(ToolCategory.MATH_AND_MEASUREMENT, listOf(Tool.CALCULATOR, Tool.RULER)),
-      CategoryGroup(ToolCategory.MUSIC_AND_INSTRUMENTS, listOf(Tool.GUITAR_TUNER)),
+      CategoryGroup(ToolCategory.MATH, listOf(Tool.CALCULATOR, Tool.RULER)),
+      CategoryGroup(ToolCategory.INSTRUMENTS, listOf(Tool.GUITAR_TUNER)),
       CategoryGroup(ToolCategory.PRODUCTIVITY, listOf(Tool.TODO_LIST)),
     )
 
@@ -631,10 +633,10 @@ class NavigationPreferencesTest {
     val manualSorted = sortCategoryGroups(groups, CategorySortingOption.MANUAL)
     assertEquals(
       listOf(
-        ToolCategory.MATH_AND_MEASUREMENT,
+        ToolCategory.MATH,
         ToolCategory.PRODUCTIVITY,
-        ToolCategory.MUSIC_AND_INSTRUMENTS,
-        ToolCategory.MISCELLANEOUS,
+        ToolCategory.INSTRUMENTS,
+        ToolCategory.LIFESTYLE,
         ToolCategory.SYSTEM,
       ),
       manualSorted.map { it.category },
@@ -644,9 +646,9 @@ class NavigationPreferencesTest {
     val alphaSorted = sortCategoryGroups(groups, CategorySortingOption.ALPHABETICAL)
     assertEquals(
       listOf(
-        ToolCategory.MUSIC_AND_INSTRUMENTS, // "Instruments"
-        ToolCategory.MISCELLANEOUS, // "Lifestyle"
-        ToolCategory.MATH_AND_MEASUREMENT, // "Math & Measure"
+        ToolCategory.INSTRUMENTS, // "Instruments"
+        ToolCategory.LIFESTYLE, // "Lifestyle"
+        ToolCategory.MATH, // "Math"
         ToolCategory.PRODUCTIVITY, // "Productivity"
         ToolCategory.SYSTEM, // "System" always last
       ),
@@ -656,8 +658,8 @@ class NavigationPreferencesTest {
     // 3. USAGE sorts by total usage of tools in group, SYSTEM last
     val usageCounts = mapOf(
       Tool.TODO_LIST to 50, // Productivity = 50
-      Tool.GUITAR_TUNER to 10, // Music & Instruments = 10
-      Tool.DICE_ROLLER to 5, // Miscellaneous = 5 + 20 = 25
+      Tool.GUITAR_TUNER to 10, // Instruments = 10
+      Tool.RECIPES to 5, // Lifestyle = 5 + 20 = 25
       Tool.PLANT_SCHEDULE to 20,
       Tool.CALCULATOR to 100, // Math = 100 + 0 = 100
       Tool.SETTINGS to 999, // System should still be last!
@@ -665,10 +667,10 @@ class NavigationPreferencesTest {
     val usageSorted = sortCategoryGroups(groups, CategorySortingOption.USAGE, usageCounts = usageCounts)
     assertEquals(
       listOf(
-        ToolCategory.MATH_AND_MEASUREMENT, // 100
+        ToolCategory.MATH, // 100
         ToolCategory.PRODUCTIVITY, // 50
-        ToolCategory.MISCELLANEOUS, // 25
-        ToolCategory.MUSIC_AND_INSTRUMENTS, // 10
+        ToolCategory.LIFESTYLE, // 25
+        ToolCategory.INSTRUMENTS, // 10
         ToolCategory.SYSTEM, // always last
       ),
       usageSorted.map { it.category },
@@ -680,9 +682,9 @@ class NavigationPreferencesTest {
       categorySorting = CategorySortingOption.ALPHABETICAL,
       categoryToolSorting = CategoryToolSortingOption.ALPHABETICAL,
     )
-    val miscGroup = combinedSorted.first { it.category == ToolCategory.MISCELLANEOUS }
-    // Dice ("Dice") < Plants ("Plants")
-    assertEquals(listOf(Tool.DICE_ROLLER, Tool.PLANT_SCHEDULE), miscGroup.tools)
+    val lifestyleGroup = combinedSorted.first { it.category == ToolCategory.LIFESTYLE }
+    // Plants ("Plants") < Recipes ("Recipes")
+    assertEquals(listOf(Tool.PLANT_SCHEDULE, Tool.RECIPES), lifestyleGroup.tools)
   }
 
   @Test
@@ -842,7 +844,7 @@ class NavigationPreferencesTest {
   fun buildCategoryRows_packsSmallCategoriesAndSplitsLargeCategoriesForTwoRowExpandedPagination() {
     val groups = listOf(
       CategoryGroup(
-        ToolCategory.MATH_AND_MEASUREMENT,
+        ToolCategory.MATH,
         listOf(Tool.CALCULATOR, Tool.UNIT_CONVERTER, Tool.RULER),
       ),
       CategoryGroup(
@@ -850,7 +852,7 @@ class NavigationPreferencesTest {
         listOf(Tool.NOTES, Tool.TODO_LIST),
       ),
       CategoryGroup(
-        ToolCategory.FILES_AND_STORAGE,
+        ToolCategory.FILES,
         listOf(Tool.FILES),
       ),
       CategoryGroup(
@@ -864,15 +866,15 @@ class NavigationPreferencesTest {
     )
 
     // At 3 tools per row:
-    // Row 0: Math & Measurement (3)
+    // Row 0: Math (3)
     // Row 1: Productivity (2) + Files (1)
     // Row 2: Miscellaneous part 1 (3)
     // Row 3: Miscellaneous part 2 (1) + System (1)
     val rows3 = buildCategoryRows(groups, effectiveColumns = 3)
     assertEquals(4, rows3.size)
-    assertEquals(listOf(ToolCategory.MATH_AND_MEASUREMENT), rows3[0].groups.map { it.category })
+    assertEquals(listOf(ToolCategory.MATH), rows3[0].groups.map { it.category })
     assertEquals(
-      listOf(ToolCategory.PRODUCTIVITY, ToolCategory.FILES_AND_STORAGE),
+      listOf(ToolCategory.PRODUCTIVITY, ToolCategory.FILES),
       rows3[1].groups.map { it.category },
     )
     assertEquals(listOf(ToolCategory.MISCELLANEOUS), rows3[2].groups.map { it.category })

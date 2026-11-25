@@ -210,7 +210,7 @@ class MainScreenViewModelTest {
   fun reorderTools_acrossPages_shiftsItemsAndMaintainsSettingsLast() {
     val initial = Tool.entries.toList()
     val firstTool = Tool.CALCULATOR
-    val page1FirstTool = Tool.UNIT_CONVERTER // Initially index 6 (first item on Page 1 with 3/row, 2 rows/page)
+    val page1FirstTool = Tool.FILES // Initially index 6 (first item on Page 1 with 3/row, 2 rows/page)
 
     assertEquals(0, initial.indexOf(firstTool))
     assertEquals(6, initial.indexOf(page1FirstTool))
@@ -219,7 +219,7 @@ class MainScreenViewModelTest {
     // Move Calculator from Page 0 (index 0) to Page 1 (index 6)
     val movedToPage1 = reorderTools(initial, fromIndex = 0, toIndex = 6)
     assertEquals(6, movedToPage1.indexOf(firstTool))
-    assertEquals(5, movedToPage1.indexOf(page1FirstTool)) // Unit Converter shifted to Page 0
+    assertEquals(5, movedToPage1.indexOf(page1FirstTool)) // Files shifted to Page 0
     assertEquals(Tool.SETTINGS, movedToPage1.last())
 
     // Move Calculator back from Page 1 (index 6) to Page 0 (index 0)
@@ -400,7 +400,7 @@ class MainScreenViewModelTest {
         targetPage = 0,
         direction = -1,
         rowsPerPage = ROWS_PER_PAGE_COLLAPSED,
-        category = ToolCategory.MATH_AND_MEASUREMENT,
+        category = ToolCategory.MATH,
       ),
     )
   }

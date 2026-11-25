@@ -591,6 +591,7 @@ fun resolveToolPanelSheetValue(
 fun MainScreen(
   onItemClick: (NavKey) -> Unit = {},
   standaloneTool: Tool? = null,
+  initialFile: File? = null,
   initialDirectory: File? = null,
   initialExpandMusicPlayer: Boolean = false,
   modifier: Modifier = Modifier,
@@ -616,6 +617,7 @@ fun MainScreen(
     if (standaloneTool != null) {
       StandaloneToolScreen(
         tool = standaloneTool,
+        initialFile = initialFile,
         initialDirectory = initialDirectory,
         initialExpandMusicPlayer = initialExpandMusicPlayer,
         preferencesRepository = preferencesRepository,
@@ -2600,6 +2602,7 @@ private fun ToolGridItem(
 @Composable
 fun StandaloneToolScreen(
   tool: Tool,
+  initialFile: File? = null,
   initialDirectory: File? = null,
   initialExpandMusicPlayer: Boolean = false,
   modifier: Modifier = Modifier,
@@ -2626,6 +2629,7 @@ fun StandaloneToolScreen(
       ToolContentView(
         tool = tool,
         bottomPadding = 0.dp,
+        initialFile = initialFile,
         initialDirectory = initialDirectory,
         initialExpandMusicPlayer = initialExpandMusicPlayer,
         preferencesRepository = preferencesRepository,
@@ -2640,6 +2644,7 @@ fun StandaloneToolScreen(
 fun ToolContentView(
   tool: Tool,
   bottomPadding: Dp = 0.dp,
+  initialFile: File? = null,
   initialDirectory: File? = null,
   initialExpandMusicPlayer: Boolean = false,
   initialColorPickerHex: String? = null,
@@ -2656,6 +2661,7 @@ fun ToolContentView(
   val bgColor = toolBackgroundColor(tool)
   val activeTexture = preferencesRepository?.backgroundTextureFlow?.collectAsState()?.value
     ?: currentBackgroundTexture()
+  val effectiveDirectory = initialDirectory ?: initialFile?.let { if (it.isDirectory) it else it.parentFile }
   CompositionLocalProvider(LocalBackgroundTexture provides activeTexture) {
   Box(
     modifier = modifier
@@ -2671,10 +2677,18 @@ fun ToolContentView(
       )
       Tool.GUITAR_TUNER -> GuitarTunerScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.METRONOME -> MetronomeScreen(modifier = Modifier.padding(bottom = bottomPadding))
-      Tool.COLOR_PICKER -> ColorPickerScreen(
-        initialHexColor = initialColorPickerHex,
-        modifier = Modifier.padding(bottom = bottomPadding),
-      )
+      Tool.COLOR_PICKER -> {
+        val resolvedHex = remember(initialColorPickerHex, initialFile?.absolutePath) {
+          initialColorPickerHex
+            ?: initialFile?.takeIf { it.isFile }?.let {
+              com.example.toolbox.ui.tools.FileManagerEngine.extractDominantColorHex(it)
+            }
+        }
+        ColorPickerScreen(
+          initialHexColor = resolvedHex,
+          modifier = Modifier.padding(bottom = bottomPadding),
+        )
+      }
       Tool.RULER -> RulerScreen(
         onOpenCalculator = onOpenCalculator,
         onOpenUnitConverter = onOpenUnitConverter,
@@ -2690,18 +2704,22 @@ fun ToolContentView(
         modifier = Modifier,
       )
       Tool.IMAGE -> ImageScreen(
-        initialDirectory = initialDirectory,
+        initialFile = initialFile?.takeIf { it.isFile },
+        initialDirectory = effectiveDirectory,
         onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
         onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
         onOpenColorPicker = onOpenColorPicker,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
-      Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.IMAGE_EDITOR -> ImageEditorScreen(
+        initialFile = initialFile?.takeIf { it.isFile },
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
       Tool.TODO_LIST -> TodoListScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.FILES -> {
         FilesScreen(
-          initialDirectory = initialDirectory,
-          rootDirectory = initialDirectory,
+          initialDirectory = effectiveDirectory,
+          rootDirectory = effectiveDirectory,
           onOpenFileConverter = { preferencesRepository?.incrementToolUsage(Tool.FILE_CONVERTER) },
           onOpenImage = { preferencesRepository?.incrementToolUsage(Tool.IMAGE) },
           onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
@@ -2718,16 +2736,19 @@ fun ToolContentView(
         )
       }
       Tool.AUDIO_RECORDER -> AudioRecorderScreen(
-        initialDirectory = initialDirectory,
+        initialDirectory = effectiveDirectory,
         onOpenAudioEditor = { preferencesRepository?.incrementToolUsage(Tool.AUDIO_EDITOR) },
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.FILE_CONVERTER -> FileConverterScreen(
-        initialDirectory = initialDirectory,
+        initialFile = initialFile?.takeIf { it.isFile },
+        initialDirectory = effectiveDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.GALLERY -> GalleryScreen(
-        rootDirectory = initialDirectory,
+        rootDirectory = effectiveDirectory,
+        initialAlbumDirectory = effectiveDirectory,
+        initialPhotoFile = initialFile?.takeIf { it.isFile },
         onOpenImage = { preferencesRepository?.incrementToolUsage(Tool.IMAGE) },
         onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
         onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
@@ -2741,21 +2762,24 @@ fun ToolContentView(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.CAMERA -> CameraScreen(
-        initialDirectory = initialDirectory,
+        initialDirectory = effectiveDirectory,
         onOpenGallery = { preferencesRepository?.incrementToolUsage(Tool.GALLERY) },
         onOpenNotes = { preferencesRepository?.incrementToolUsage(Tool.NOTES) },
         onOpenColorPicker = onOpenColorPicker,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.AUDIO_EDITOR -> AudioEditorScreen(
+        initialFile = initialFile?.takeIf { it.isFile },
+        initialDirectory = effectiveDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.VIDEO_EDITOR -> VideoEditorScreen(
-        initialDirectory = initialDirectory,
+        initialFile = initialFile?.takeIf { it.isFile },
+        initialDirectory = effectiveDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SCREEN_RECORDER -> ScreenRecorderScreen(
-        initialDirectory = initialDirectory,
+        initialDirectory = effectiveDirectory,
         onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
         modifier = Modifier.padding(bottom = bottomPadding),
       )
@@ -2769,17 +2793,20 @@ fun ToolContentView(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.ARCHIVE -> ArchiveScreen(
-        initialDirectory = initialDirectory,
+        initialFile = initialFile?.takeIf { it.isFile },
+        initialDirectory = effectiveDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.MUSIC -> MusicPlayerScreen(
-        initialDirectory = initialDirectory,
-        initialPlayerExpanded = initialExpandMusicPlayer,
+        initialFile = initialFile?.takeIf { it.isFile },
+        initialDirectory = effectiveDirectory,
+        initialPlayerExpanded = initialExpandMusicPlayer || initialFile?.isFile == true,
         onOpenColorPicker = onOpenColorPicker,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.PDF_VIEWER -> PdfViewerScreen(
-        initialDirectory = initialDirectory,
+        initialFile = initialFile?.takeIf { it.isFile },
+        initialDirectory = effectiveDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.RECIPES -> RecipeBookScreen(

@@ -291,7 +291,7 @@ class NotesTest {
     assertEquals(original, restored)
     assertEquals(
       "# Project Ideas\n\n+ Offline sync\n- Color cards\n\n#ideas, #android",
-      restored.toTtxt(),
+      restored.toText(),
     )
     assertEquals(
       "# Project Ideas\n\n+ Offline sync\n- Color cards\n\nideas, android",
@@ -324,7 +324,7 @@ class NotesTest {
       labels = listOf("outdoors", "weekend trip"),
     )
 
-    val expectedChecklistTtxt = listOf(
+    val expectedChecklistText = listOf(
       "# Camping Checklist",
       "",
       "- Tent",
@@ -335,28 +335,28 @@ class NotesTest {
       "",
       "#outdoors, #weekend trip",
     ).joinToString("\n")
-    assertEquals(expectedChecklistTtxt, checklistNote.toTtxt())
+    assertEquals(expectedChecklistText, checklistNote.toText())
 
-    val parsedChecklist = NoteItem.fromTtxt(expectedChecklistTtxt, id = "chk-42")
+    val parsedChecklist = NoteItem.fromText(expectedChecklistText, id = "chk-42")
     assertEquals("Camping Checklist", parsedChecklist.title)
     assertTrue(parsedChecklist.isChecklist)
     assertEquals(5, parsedChecklist.checklistItems.size)
     assertEquals("Tent", parsedChecklist.checklistItems[0].text)
     assertFalse(parsedChecklist.checklistItems[0].isChecked)
     assertEquals(0, parsedChecklist.checklistItems[0].indentLevel)
-    assertEquals('-', parsedChecklist.checklistItems[0].ttxtPrefix)
+    assertEquals('-', parsedChecklist.checklistItems[0].textPrefix)
     assertEquals("Rainfly & stakes", parsedChecklist.checklistItems[1].text)
     assertFalse(parsedChecklist.checklistItems[1].isChecked)
     assertEquals(1, parsedChecklist.checklistItems[1].indentLevel)
-    assertEquals("\t- Rainfly & stakes", parsedChecklist.checklistItems[1].toTtxtLine())
+    assertEquals("\t- Rainfly & stakes", parsedChecklist.checklistItems[1].toTextLine())
     assertEquals("Titanium pegs", parsedChecklist.checklistItems[2].text)
     assertTrue(parsedChecklist.checklistItems[2].isChecked)
     assertEquals(2, parsedChecklist.checklistItems[2].indentLevel)
-    assertEquals("\t\t+ Titanium pegs", parsedChecklist.checklistItems[2].toTtxtLine())
+    assertEquals("\t\t+ Titanium pegs", parsedChecklist.checklistItems[2].toTextLine())
     assertEquals("Sleeping bag", parsedChecklist.checklistItems[3].text)
     assertTrue(parsedChecklist.checklistItems[3].isChecked)
     assertEquals(0, parsedChecklist.checklistItems[3].indentLevel)
-    assertEquals('+', parsedChecklist.checklistItems[3].ttxtPrefix)
+    assertEquals('+', parsedChecklist.checklistItems[3].textPrefix)
     assertEquals("Water filter", parsedChecklist.checklistItems[4].text)
     assertFalse(parsedChecklist.checklistItems[4].isChecked)
     assertEquals(0, parsedChecklist.checklistItems[4].indentLevel)
@@ -370,14 +370,14 @@ class NotesTest {
       isChecklist = false,
       color = NoteColor.SAND,
     )
-    val expectedMarkdownTtxt = """
+    val expectedMarkdownText = """
       # Architecture Notes
 
       Use **Material 3** tokens and `.text` files in `/Notes`.
     """.trimIndent()
-    assertEquals(expectedMarkdownTtxt, markdownNote.toTtxt())
+    assertEquals(expectedMarkdownText, markdownNote.toText())
 
-    val parsedMarkdown = NoteItem.fromTtxt(expectedMarkdownTtxt, id = "md-1")
+    val parsedMarkdown = NoteItem.fromText(expectedMarkdownText, id = "md-1")
     assertEquals("Architecture Notes", parsedMarkdown.title)
     assertFalse(parsedMarkdown.isChecklist)
     assertEquals("Use **Material 3** tokens and `.text` files in `/Notes`.", parsedMarkdown.content)
@@ -393,8 +393,8 @@ class NotesTest {
       val archFile = java.io.File(tempNotesDir, "Architecture Notes.text")
       assertTrue(campingFile.exists())
       assertTrue(archFile.exists())
-      assertEquals(expectedChecklistTtxt, campingFile.readText())
-      assertEquals(expectedMarkdownTtxt, archFile.readText())
+      assertEquals(expectedChecklistText, campingFile.readText())
+      assertEquals(expectedMarkdownText, archFile.readText())
 
       // Checking 'Tent' replaces '-' with '+' in the .text file on disk
       val afterCheck = NotesEngine.toggleChecklistItem(repo.loadNotes(), "chk-42", "c1")

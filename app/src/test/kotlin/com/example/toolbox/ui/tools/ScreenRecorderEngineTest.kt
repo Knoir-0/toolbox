@@ -28,9 +28,9 @@ class ScreenRecorderEngineTest {
   }
 
   @Test
-  fun screenRecorderTool_isRegisteredInPhotoAndVideoCategoryBeforeSettings() {
+  fun screenRecorderTool_isRegisteredInMediaCategoryBeforeSettings() {
     assertEquals("Screen Recorder", Tool.SCREEN_RECORDER.title)
-    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.SCREEN_RECORDER.category)
+    assertEquals(ToolCategory.MEDIA, Tool.SCREEN_RECORDER.category)
     assertEquals(Tool.SETTINGS, Tool.entries.last())
     assertTrue(Tool.entries.indexOf(Tool.SCREEN_RECORDER) < Tool.entries.indexOf(Tool.SETTINGS))
   }

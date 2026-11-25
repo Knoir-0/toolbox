@@ -308,7 +308,7 @@ fun ImageScreen(
         .testTag("image_screen"),
     ) {
       ToolboxTopBar(
-        title = "Image",
+        title = "Viewer",
         subtext = "View images, OCR text, QR codes & colors",
         icon = Icons.Default.CropOriginal,
         onNavigateBack = onNavigateBack,

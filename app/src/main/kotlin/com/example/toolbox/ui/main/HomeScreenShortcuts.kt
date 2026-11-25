@@ -64,6 +64,7 @@ const val EXTRA_ELEMENTS_OPEN_INSPECTOR = "extra_elements_open_inspector"
 const val EXTRA_ELEMENTS_OPEN_SEARCH = "extra_elements_open_search"
 const val EXTRA_ELEMENTS_OPEN_MOLAR_MASS = "extra_elements_open_molar_mass"
 const val EXTRA_CALENDAR_VIEW_MODE = "extra_calendar_view_mode"
+const val EXTRA_INITIAL_FILE_PATH = "extra_initial_file_path"
 
 const val STANDALONE_SHORTCUT_INTENT_FLAGS =
   Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -223,22 +224,125 @@ fun parseStandaloneToolName(name: String?): Tool? {
 }
 
 /**
- * Parses the standalone tool requested in an incoming [Intent] if launched via home screen shortcut.
+ * Parses the standalone tool requested in an incoming [Intent] if launched via home screen shortcut
+ * or Android system "Open with..." `<activity-alias>`.
  */
 fun parseStandaloneTool(intent: Intent?): Tool? {
+  val data = intent?.data
+  val isExternalFileScheme = data != null && (
+    data.scheme.equals("content", ignoreCase = true) ||
+      data.scheme.equals("file", ignoreCase = true)
+    )
   val name = intent?.getStringExtra(EXTRA_STANDALONE_TOOL)
-    ?: intent?.data?.getQueryParameter("tool")
-    ?: intent?.data?.lastPathSegment
+    ?: if (!isExternalFileScheme) {
+      data?.getQueryParameter("tool") ?: data?.lastPathSegment
+    } else {
+      null
+    }
   return parseStandaloneToolName(name)
     ?: parseStandaloneToolFromComponent(intent?.component?.className)
+}
+
+/**
+ * Extracts an incoming external `content://` or `file://` [android.net.Uri] from an `ACTION_VIEW`,
+ * `ACTION_EDIT`, or `ACTION_SEND` [Intent], or `null` if the intent does not carry an external file URI.
+ */
+fun parseIncomingExternalUri(intent: Intent?): android.net.Uri? {
+  if (intent == null) return null
+  val data = intent.data
+  if (data != null && (
+      data.scheme.equals("content", ignoreCase = true) ||
+        data.scheme.equals("file", ignoreCase = true)
+      )
+  ) {
+    return data
+  }
+  @Suppress("DEPRECATION")
+  val streamUri = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)
+  if (streamUri != null && (
+      streamUri.scheme.equals("content", ignoreCase = true) ||
+        streamUri.scheme.equals("file", ignoreCase = true)
+      )
+  ) {
+    return streamUri
+  }
+  val clipUri = intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+  if (clipUri != null && (
+      clipUri.scheme.equals("content", ignoreCase = true) ||
+        clipUri.scheme.equals("file", ignoreCase = true)
+      )
+  ) {
+    return clipUri
+  }
+  return null
+}
+
+/**
+ * Resolves an incoming [File] (or directory) from an Android system "Open with..." / edit / share
+ * [Intent] (or [EXTRA_INITIAL_FILE_PATH]), copying `content://` streams to a temporary cache file
+ * when the underlying real storage path cannot be accessed directly.
+ */
+fun resolveIncomingIntentFile(
+  context: Context,
+  intent: Intent?,
+): File? {
+  if (intent == null) return null
+  val fromExtra = intent.getStringExtra(EXTRA_INITIAL_FILE_PATH)
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?.let { File(it) }
+    ?.takeIf { it.exists() }
+  if (fromExtra != null) return fromExtra
+
+  val uri = parseIncomingExternalUri(intent) ?: return null
+  try {
+    if ("file".equals(uri.scheme, ignoreCase = true)) {
+      val path = uri.path
+      if (!path.isNullOrBlank()) {
+        val f = File(path)
+        if (f.exists()) return f
+      }
+    }
+    com.example.toolbox.ui.tools.ToolboxFileProvider.resolveFileFromUri(context, uri)?.let { providerFile ->
+      if (providerFile.exists()) return providerFile
+    }
+    if (android.provider.DocumentsContract.isDocumentUri(context, uri) &&
+      uri.authority == "com.android.externalstorage.documents"
+    ) {
+      val docId = android.provider.DocumentsContract.getDocumentId(uri)
+      val split = docId.split(":", limit = 2)
+      val type = split.getOrNull(0).orEmpty()
+      val rel = split.getOrNull(1).orEmpty()
+      val rootDir = com.example.toolbox.ui.tools.FileManagerEngine.getUserRootDirectory()
+      val candidate = if ("primary".equals(type, ignoreCase = true)) {
+        File(rootDir, rel)
+      } else if (type.isNotEmpty()) {
+        File("/storage/$type", rel)
+      } else {
+        null
+      }
+      if (candidate != null && candidate.exists()) return candidate
+    }
+  } catch (_: Throwable) {}
+
+  return com.example.toolbox.ui.tools.copyUriToTempSourceFile(
+    context = context,
+    uri = uri,
+    fallbackMimeType = intent.type,
+  )
 }
 
 /**
  * Parses the normalized folder path requested in an incoming [Intent] if launched via a folder home screen shortcut.
  */
 fun parseFolderShortcut(intent: Intent?): String? {
+  val data = intent?.data
+  val isExternalFileScheme = data != null && (
+    data.scheme.equals("content", ignoreCase = true) ||
+      data.scheme.equals("file", ignoreCase = true)
+    )
   val raw = intent?.getStringExtra(EXTRA_FOLDER_PATH)
-    ?: intent?.data?.getQueryParameter("folder")
+    ?: if (!isExternalFileScheme) data?.getQueryParameter("folder") else null
   return normalizeShortcutFolderPath(raw)
 }
 

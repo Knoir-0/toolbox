@@ -10,6 +10,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import com.example.toolbox.ui.theme.ToolboxTheme
@@ -676,7 +677,7 @@ class NotesScreenTest {
   }
 
   @Test
-  fun notesScreen_requiresScopedStorageAccessToNotesRoot_andSavesTtxtFiles() {
+  fun notesScreen_requiresScopedStorageAccessToNotesRoot_andSavesTextFiles() {
     val tempRootDir = java.nio.file.Files.createTempDirectory("notes_scoped_root").toFile()
     val notesDir = java.io.File(tempRootDir, "Notes")
     try {
@@ -752,11 +753,11 @@ class NotesScreenTest {
       composeTestRule.onNodeWithText("#Hardware Store").assertDoesNotExist()
       composeTestRule.onNodeWithText("#Weekend DIY").assertDoesNotExist()
 
-      val savedTtxtFile = java.io.File(notesDir, "Toolbox Supplies.text")
-      assertTrue("Expected .text file in /Notes", savedTtxtFile.exists())
+      val savedTextFile = java.io.File(notesDir, "Toolbox Supplies.text")
+      assertTrue("Expected .text file in /Notes", savedTextFile.exists())
       assertEquals(
         "# Toolbox Supplies\n\n- Wrench\n- Screwdriver\n\n#Hardware Store, #Weekend DIY",
-        savedTtxtFile.readText(),
+        savedTextFile.readText(),
       )
 
       // Checking off the first item replaces '-' with '+' in the .text file while keeping the #Label CSV footer line
@@ -766,7 +767,7 @@ class NotesScreenTest {
 
       assertEquals(
         "# Toolbox Supplies\n\n+ Wrench\n- Screwdriver\n\n#Hardware Store, #Weekend DIY",
-        savedTtxtFile.readText(),
+        savedTextFile.readText(),
       )
     } finally {
       tempRootDir.deleteRecursively()
@@ -842,6 +843,83 @@ class NotesScreenTest {
   }
 
   @Test
+  fun todoListScreen_requiresScopedStorageAccessToTodoRoot_andSavesSingleTodoTextFile() {
+    val tempRootDir = java.nio.file.Files.createTempDirectory("todo_scoped_root").toFile()
+    val todoDir = java.io.File(tempRootDir, "ToDo")
+    try {
+      val todoRepo = InMemoryTodoListRepository(
+        initialTodoFolderGranted = false,
+        todoDirectory = todoDir,
+      )
+      var requestedFolder: TodoFolder? = null
+
+      composeTestRule.setContent {
+        ToolboxTheme {
+          TodoListScreen(
+            repository = todoRepo,
+            initialGrantedFolderPaths = emptySet(),
+            onRequestFolderSystemAccess = { folder, onResult ->
+              requestedFolder = folder
+              onResult(true)
+            },
+          )
+        }
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Before granting scoped storage access to /ToDo, tool shows locked storage view and hides quick-add bar
+      composeTestRule.onNodeWithTag("locked_storage_state").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("todo_quick_add_card").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("folder_lock_icon_ToDo", useUnmergedTree = true).assertExists()
+
+      // 2. Tapping a locked navigation pill displays the /ToDo folder permission request view
+      composeTestRule.onNodeWithTag("todo_task_count_label").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("folder_permission_view").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Allow access to files in /ToDo?").assertIsDisplayed()
+
+      val systemIntent = TodoListEngine.createFolderAccessIntent(
+        context = composeTestRule.activity,
+        folder = DEFAULT_TODO_SCOPED_FOLDER,
+        userRoot = tempRootDir,
+      )
+      assertEquals(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE, systemIntent.action)
+
+      // 3. Tapping "Allow" grants scoped storage access to /ToDo and unlocks the To Do tool
+      composeTestRule.onNodeWithTag("allow_folder_permission_button").performClick()
+      composeTestRule.waitForIdle()
+
+      assertEquals(DEFAULT_TODO_SCOPED_FOLDER, requestedFolder)
+      composeTestRule.onNodeWithTag("locked_storage_state").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("folder_permission_view").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("todo_quick_add_card").assertIsDisplayed()
+
+      // 4. Add tasks and nested subtasks, and verify the whole To Do list is saved as a single /ToDo/to-do.text file
+      composeTestRule.onNodeWithTag("todo_input_title").performTextInput("Assemble pedalboard")
+      composeTestRule.onNodeWithTag("todo_add_button").performClick()
+      composeTestRule.waitForIdle()
+
+      val task1 = todoRepo.loadTasks().single()
+      composeTestRule.onNodeWithTag("todo_add_subtask_toggle_${task1.id}").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("todo_subtask_input_${task1.id}")
+        .performTextInput("- Mount power supply\n\t- Route 9V cables")
+      composeTestRule.onNodeWithTag("todo_subtask_input_${task1.id}")
+        .performImeAction()
+      composeTestRule.waitForIdle()
+
+      val savedTodoFile = java.io.File(todoDir, "to-do.text")
+      assertTrue("Expected to-do.text file in /ToDo", savedTodoFile.exists())
+      assertEquals(
+        "# To Do\n\n- Assemble pedalboard\n\t- Mount power supply\n\t\t- Route 9V cables",
+        savedTodoFile.readText(),
+      )
+    } finally {
+      tempRootDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun todoListScreen_quickActions_focusAddTaskAndOpenScheduleView() {
     val todoRepo = InMemoryTodoListRepository()
     composeTestRule.setContent {
@@ -864,6 +942,51 @@ class NotesScreenTest {
     }
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("No scheduled tasks").assertIsDisplayed()
+  }
+
+  @Test
+  fun todoListScreen_typingNewTask_suggestsItemsFromSavedTasksList() {
+    val savedMorning = TodoItem(
+      id = "saved-morning",
+      title = "Morning Routine",
+      subtasks = listOf(
+        TodoSubTask(id = "sub-1", title = "Make coffee"),
+        TodoSubTask(id = "sub-2", title = "Stretch"),
+      ),
+    )
+    val savedGrocery = TodoItem(
+      id = "saved-grocery",
+      title = "Grocery Shopping",
+    )
+    val todoRepo = InMemoryTodoListRepository(
+      initialSavedTasks = listOf(savedMorning, savedGrocery),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        TodoListScreen(repository = todoRepo)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // No suggestions shown when input is empty
+    composeTestRule.onNodeWithTag("todo_saved_suggestions").assertDoesNotExist()
+
+    // Typing "Morn" shows matching saved task suggestion above the quick-add input bar
+    composeTestRule.onNodeWithTag("todo_input_title").performTextInput("Morn")
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("todo_saved_suggestions").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("todo_saved_suggestion_saved-morning").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("todo_saved_suggestion_saved-grocery").assertDoesNotExist()
+
+    // Tapping the suggestion adds the saved task (including its subtasks) and clears the input
+    composeTestRule.onNodeWithTag("todo_saved_suggestion_saved-morning").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("todo_saved_suggestions").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Morning Routine").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Make coffee").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Stretch").assertIsDisplayed()
   }
 
   @Test
