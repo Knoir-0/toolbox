@@ -26,6 +26,9 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.ReturnCode
+import dev.ffmpegkit.whisper.Whisper
+import dev.ffmpegkit.whisper.WhisperConfig
+import dev.ffmpegkit.whisper.WhisperModel
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -360,6 +363,14 @@ enum class ConvertibleFormat(
     category = ConversionMediaCategory.DOCUMENT,
     description = "Extensible Markup Language data",
   ),
+  SRT(
+    displayName = "SRT",
+    extension = "srt",
+    aliases = setOf("subrip"),
+    mimeType = "application/x-subrip",
+    category = ConversionMediaCategory.DOCUMENT,
+    description = "SubRip timestamped subtitle & transcript",
+  ),
 
   // --- ARCHIVE FORMATS ---
   ZIP(
@@ -420,6 +431,7 @@ data class ConversionRoute(
   val fallbackBackend: ConverterBackend? = null,
   val description: String,
   val usesOcr: Boolean = false,
+  val usesSpeechToText: Boolean = false,
 ) {
   val isCrossCategory: Boolean
     get() = source.category != target.category
@@ -428,6 +440,24 @@ data class ConversionRoute(
     return preferredBackend == backend || fallbackBackend == backend
   }
 }
+
+/**
+ * Timestamped speech-to-text transcript segment produced by the on-device Whisper STT engine.
+ */
+data class SpeechTranscriptSegment(
+  val startMs: Long,
+  val endMs: Long,
+  val text: String,
+)
+
+/**
+ * Complete result of an on-device Whisper speech-to-text transcription.
+ */
+data class SpeechTranscriptDocument(
+  val rawText: String,
+  val segments: List<SpeechTranscriptSegment> = emptyList(),
+  val title: String = "Audio Transcript",
+)
 
 /**
  * Result of a completed or failed conversion operation.
@@ -532,6 +562,22 @@ object FileConverterEngine {
     ConvertibleFormat.HTML,
   )
 
+  // Speech-to-Text output document formats (plain text, subtitles, markup, structured data)
+  private val SPEECH_TO_TEXT_TARGET_FORMATS = setOf(
+    ConvertibleFormat.TXT,
+    ConvertibleFormat.SRT,
+    ConvertibleFormat.MD,
+    ConvertibleFormat.HTML,
+    ConvertibleFormat.JSON,
+    ConvertibleFormat.CSV,
+    ConvertibleFormat.TSV,
+    ConvertibleFormat.XML,
+  )
+
+  const val WHISPER_BUNDLED_MODEL_ASSET_PATH = "whisper/ggml-tiny-q5_1.bin"
+  private var cachedWhisperModel: WhisperModel? = null
+  private val whisperModelLock = Any()
+
   /**
    * Complete capability registry mapping each source [ConvertibleFormat] to all target
    * [ConvertibleFormat]s and their [ConversionRoute]s.
@@ -550,6 +596,7 @@ object FileConverterEngine {
       fallback: ConverterBackend? = null,
       description: String,
       usesOcr: Boolean = false,
+      usesSpeechToText: Boolean = false,
     ) {
       if (source == target) return
       val targetMap = map.getOrPut(source) { linkedMapOf() }
@@ -560,6 +607,7 @@ object FileConverterEngine {
         fallbackBackend = fallback,
         description = description,
         usesOcr = usesOcr,
+        usesSpeechToText = usesSpeechToText,
       )
     }
 
@@ -630,7 +678,7 @@ object FileConverterEngine {
       )
     }
 
-    // 3. AUDIO <-> AUDIO
+    // 3. AUDIO <-> AUDIO & AUDIO -> DOCUMENT / SUBTITLE (On-device Whisper Speech-to-Text)
     for (src in AUDIO_FORMATS) {
       for (dst in AUDIO_FORMATS) {
         if (src == dst) continue
@@ -653,9 +701,22 @@ object FileConverterEngine {
           )
         }
       }
+
+      // Every audio format can be transcribed to TXT, SRT, MD, HTML, JSON, CSV, TSV, and XML via on-device Whisper Speech-to-Text
+      val canNativeDecodeAudio = src in NATIVE_DECODABLE_AUDIO
+      for (sttDst in SPEECH_TO_TEXT_TARGET_FORMATS) {
+        register(
+          source = src,
+          target = sttDst,
+          preferred = if (canNativeDecodeAudio) ConverterBackend.NATIVE else ConverterBackend.FFMPEG,
+          fallback = if (canNativeDecodeAudio) ConverterBackend.FFMPEG else null,
+          description = "On-device Whisper speech-to-text transcription (${src.displayName} → ${sttDst.displayName})",
+          usesSpeechToText = true,
+        )
+      }
     }
 
-    // 4. VIDEO <-> VIDEO, VIDEO -> AUDIO (Extract Audio), VIDEO -> IMAGE / GIF
+    // 4. VIDEO <-> VIDEO, VIDEO -> AUDIO (Extract Audio), VIDEO -> IMAGE / GIF, VIDEO -> DOCUMENT / SUBTITLE (Whisper STT)
     for (src in VIDEO_FORMATS) {
       for (dst in VIDEO_FORMATS) {
         if (src == dst) continue
@@ -707,18 +768,41 @@ object FileConverterEngine {
           description = "Extract high-resolution video frame to ${imgDst.displayName}",
         )
       }
+
+      // Video -> Speech-to-Text transcript & subtitles (TXT, SRT, MD, HTML, JSON, CSV, TSV, XML) via Whisper
+      for (sttDst in SPEECH_TO_TEXT_TARGET_FORMATS) {
+        register(
+          source = src,
+          target = sttDst,
+          preferred = ConverterBackend.NATIVE,
+          fallback = ConverterBackend.FFMPEG,
+          description = "On-device Whisper video speech-to-text transcription (${src.displayName} → ${sttDst.displayName})",
+          usesSpeechToText = true,
+        )
+      }
     }
 
     // 5. DOCUMENT & STRUCTURED DATA CONVERSIONS (100% Native)
-    val allTextAndData = TEXT_MARKUP_FORMATS + STRUCTURED_DATA_FORMATS
+    val allTextAndData = TEXT_MARKUP_FORMATS + STRUCTURED_DATA_FORMATS + setOf(ConvertibleFormat.SRT)
     for (src in allTextAndData) {
-      // Any text/markup/data file can be rendered to PDF natively
+      // Any text/markup/data/subtitle file can be rendered to PDF natively
       register(
         source = src,
         target = ConvertibleFormat.PDF,
         preferred = ConverterBackend.NATIVE,
         fallback = null,
         description = "Native Android PdfDocument typeset rendering",
+      )
+    }
+
+    // SRT -> Text/Markup & Structured Data (TXT, MD, HTML, JSON, CSV, TSV, XML)
+    for (dst in TEXT_MARKUP_FORMATS + STRUCTURED_DATA_FORMATS) {
+      register(
+        source = ConvertibleFormat.SRT,
+        target = dst,
+        preferred = ConverterBackend.NATIVE,
+        fallback = null,
+        description = "Native SubRip subtitle conversion (SRT → ${dst.displayName})",
       )
     }
 
@@ -1090,6 +1174,7 @@ object FileConverterEngine {
     sourceFormatOverride: ConvertibleFormat? = null,
     ffmpegRunner: (suspend (List<String>, File) -> Boolean)? = null,
     ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)? = null,
+    speechToTextRunner: (suspend (File, ConvertibleFormat) -> SpeechTranscriptDocument)? = null,
   ): ConversionResult = withContext(Dispatchers.IO) {
     val startTime = System.currentTimeMillis()
     val sourceFormat = sourceFormatOverride ?: detectFormat(sourceFile)
@@ -1156,6 +1241,7 @@ object FileConverterEngine {
         targetFormat = targetFormat,
         ffmpegRunner = ffmpegRunner,
         ocrRunner = ocrRunner,
+        speechToTextRunner = speechToTextRunner,
       )
     } catch (e: Throwable) {
       primaryError = e.message ?: e::class.java.simpleName
@@ -1195,6 +1281,7 @@ object FileConverterEngine {
           targetFormat = targetFormat,
           ffmpegRunner = ffmpegRunner,
           ocrRunner = ocrRunner,
+          speechToTextRunner = speechToTextRunner,
         )
       } catch (e: Throwable) {
         fallbackError = e.message ?: e::class.java.simpleName
@@ -1257,6 +1344,7 @@ object FileConverterEngine {
     targetFormat: ConvertibleFormat,
     ffmpegRunner: (suspend (List<String>, File) -> Boolean)?,
     ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)?,
+    speechToTextRunner: (suspend (File, ConvertibleFormat) -> SpeechTranscriptDocument)? = null,
   ): Boolean {
     return when (backend) {
       ConverterBackend.NATIVE -> executeNativeConversion(
@@ -1266,14 +1354,17 @@ object FileConverterEngine {
         sourceFormat = sourceFormat,
         targetFormat = targetFormat,
         ocrRunner = ocrRunner,
+        speechToTextRunner = speechToTextRunner,
       )
       ConverterBackend.FFMPEG -> executeFfmpegConversion(
+        context = context,
         sourceFile = sourceFile,
         outputFile = outputFile,
         sourceFormat = sourceFormat,
         targetFormat = targetFormat,
         ffmpegRunner = ffmpegRunner,
         ocrRunner = ocrRunner,
+        speechToTextRunner = speechToTextRunner,
       )
     }
   }
@@ -1289,6 +1380,7 @@ object FileConverterEngine {
     sourceFormat: ConvertibleFormat,
     targetFormat: ConvertibleFormat,
     ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)? = null,
+    speechToTextRunner: (suspend (File, ConvertibleFormat) -> SpeechTranscriptDocument)? = null,
   ): Boolean {
     return when {
       // 1. Archive <-> Archive
@@ -1297,14 +1389,14 @@ object FileConverterEngine {
         convertArchiveNative(sourceFile, outputFile, sourceFormat, targetFormat)
       }
 
-      // 2. Document / Structured Data -> PDF
-      (sourceFormat in TEXT_MARKUP_FORMATS || sourceFormat in STRUCTURED_DATA_FORMATS) &&
+      // 2. Document / Structured Data / Subtitle -> PDF
+      (sourceFormat in TEXT_MARKUP_FORMATS || sourceFormat in STRUCTURED_DATA_FORMATS || sourceFormat == ConvertibleFormat.SRT) &&
         targetFormat == ConvertibleFormat.PDF -> {
         convertTextOrDataToPdfNative(sourceFile, outputFile, sourceFormat)
       }
 
-      // 3. Document / Structured Data <-> Document / Structured Data
-      (sourceFormat in TEXT_MARKUP_FORMATS || sourceFormat in STRUCTURED_DATA_FORMATS) &&
+      // 3. Document / Structured Data / Subtitle <-> Document / Structured Data
+      (sourceFormat in TEXT_MARKUP_FORMATS || sourceFormat in STRUCTURED_DATA_FORMATS || sourceFormat == ConvertibleFormat.SRT) &&
         (targetFormat in TEXT_MARKUP_FORMATS || targetFormat in STRUCTURED_DATA_FORMATS) -> {
         convertDocumentOrDataNative(sourceFile, outputFile, sourceFormat, targetFormat)
       }
@@ -1350,29 +1442,43 @@ object FileConverterEngine {
         convertImageToImageNative(sourceFile, outputFile, targetFormat)
       }
 
-      // 7. Video -> Image (Frame extraction)
+      // 9. Video -> Image (Frame extraction)
       sourceFormat.category == ConversionMediaCategory.VIDEO &&
         targetFormat.category == ConversionMediaCategory.IMAGE -> {
         convertVideoToFrameImageNative(sourceFile, outputFile, targetFormat)
       }
 
-      // 8. Video -> MP4 (Media3 Transformer)
+      // 10. Video -> MP4 (Media3 Transformer)
       sourceFormat.category == ConversionMediaCategory.VIDEO &&
         targetFormat == ConvertibleFormat.MP4 -> {
         if (context == null) return false
         convertVideoToMp4Media3(context, sourceFile, outputFile)
       }
 
-      // 9. Audio / Video -> WAV (MediaExtractor + MediaCodec PCM decode -> RIFF WAV)
+      // 11. Audio / Video -> WAV (MediaExtractor + MediaCodec PCM decode -> RIFF WAV)
       (sourceFormat.category == ConversionMediaCategory.AUDIO || sourceFormat.category == ConversionMediaCategory.VIDEO) &&
         targetFormat == ConvertibleFormat.WAV -> {
         convertMediaToWavNative(sourceFile, outputFile)
       }
 
-      // 10. Audio / Video -> M4A or AAC
+      // 12. Audio / Video -> M4A or AAC
       (sourceFormat.category == ConversionMediaCategory.AUDIO || sourceFormat.category == ConversionMediaCategory.VIDEO) &&
         (targetFormat == ConvertibleFormat.M4A || targetFormat == ConvertibleFormat.AAC) -> {
         convertMediaToAacOrM4aNative(sourceFile, outputFile, targetFormat)
+      }
+
+      // 13. Audio / Video -> Document / Subtitle (On-device Whisper Speech-to-Text)
+      (sourceFormat.category == ConversionMediaCategory.AUDIO || sourceFormat.category == ConversionMediaCategory.VIDEO) &&
+        targetFormat in SPEECH_TO_TEXT_TARGET_FORMATS -> {
+        convertMediaToSpeechToTextNative(
+          context = context,
+          sourceFile = sourceFile,
+          outputFile = outputFile,
+          sourceFormat = sourceFormat,
+          targetFormat = targetFormat,
+          defaultTitle = extractFileStem(sourceFile.name),
+          speechToTextRunner = speechToTextRunner,
+        )
       }
 
       else -> false
@@ -2461,6 +2567,11 @@ object FileConverterEngine {
     val rawContent = sourceFile.readText(Charsets.UTF_8)
     val plainText = when (sourceFormat) {
       ConvertibleFormat.HTML -> stripHtmlToPlainText(rawContent)
+      ConvertibleFormat.SRT -> formatSpeechTranscript(
+        transcript = parseSrtToSpeechTranscript(rawContent, sourceFile.nameWithoutExtension),
+        targetFormat = ConvertibleFormat.TXT,
+        defaultTitle = sourceFile.nameWithoutExtension,
+      )
       else -> rawContent
     }
     val pdf = PdfDocument()
@@ -2523,6 +2634,18 @@ object FileConverterEngine {
     targetFormat: ConvertibleFormat,
   ): Boolean {
     val content = sourceFile.readText(Charsets.UTF_8)
+
+    // SubRip Subtitle (SRT -> TXT, MD, HTML, JSON, CSV, TSV, XML)
+    if (sourceFormat == ConvertibleFormat.SRT) {
+      val transcript = parseSrtToSpeechTranscript(content, sourceFile.nameWithoutExtension)
+      val formatted = formatSpeechTranscript(
+        transcript = transcript,
+        targetFormat = targetFormat,
+        defaultTitle = sourceFile.nameWithoutExtension,
+      )
+      outputFile.writeText(formatted.ifEmpty { " " }, Charsets.UTF_8)
+      return outputFile.exists() && outputFile.length() > 0L
+    }
 
     // Structured data conversions (CSV, TSV, JSON, XML -> CSV, TSV, JSON, XML, HTML, MD, TXT)
     if (sourceFormat in STRUCTURED_DATA_FORMATS) {
@@ -2658,6 +2781,329 @@ object FileConverterEngine {
       if (map.isNotEmpty()) rows.add(map)
     }
     return rows
+  }
+
+  // ============================================================================
+  // ON-DEVICE WHISPER SPEECH-TO-TEXT (AUDIO / VIDEO -> TXT, SRT, MD, HTML, JSON, CSV, TSV, XML)
+  // ============================================================================
+
+  /**
+   * Native Audio/Video -> Speech-to-Text conversion:
+   * Decodes the source audio track to temporary 16-bit PCM WAV via Android's [MediaExtractor] + [MediaCodec]
+   * (or directly reads `.wav` input), runs on-device Whisper speech recognition, and formats into [targetFormat].
+   */
+  private suspend fun convertMediaToSpeechToTextNative(
+    context: Context?,
+    sourceFile: File,
+    outputFile: File,
+    sourceFormat: ConvertibleFormat,
+    targetFormat: ConvertibleFormat,
+    defaultTitle: String,
+    speechToTextRunner: (suspend (File, ConvertibleFormat) -> SpeechTranscriptDocument)? = null,
+  ): Boolean {
+    val transcript = if (speechToTextRunner != null) {
+      speechToTextRunner(sourceFile, sourceFormat)
+    } else {
+      val appContext = context ?: return false
+      if (sourceFormat == ConvertibleFormat.WAV) {
+        transcribeWavWithWhisper(appContext, sourceFile, defaultTitle) ?: return false
+      } else {
+        val tempWav = File.createTempFile("whisper_native_", ".wav", outputFile.parentFile)
+        try {
+          if (!convertMediaToWavNative(sourceFile, tempWav) || !tempWav.exists()) return false
+          transcribeWavWithWhisper(appContext, tempWav, defaultTitle) ?: return false
+        } finally {
+          tempWav.delete()
+        }
+      }
+    }
+
+    val formatted = formatSpeechTranscript(
+      transcript = transcript,
+      targetFormat = targetFormat,
+      defaultTitle = defaultTitle.ifBlank { "Audio Transcript" },
+    )
+    outputFile.writeText(formatted.ifEmpty { " " }, Charsets.UTF_8)
+    return outputFile.exists() && outputFile.length() > 0L
+  }
+
+  private suspend fun getOrLoadWhisperModel(context: Context): WhisperModel? {
+    synchronized(whisperModelLock) {
+      val existing = cachedWhisperModel
+      if (existing != null && existing.isValid) {
+        return existing
+      }
+    }
+    val loaded = try {
+      Whisper.loadModelFromAsset(context.applicationContext, WHISPER_BUNDLED_MODEL_ASSET_PATH)
+    } catch (_: Throwable) {
+      null
+    } ?: return null
+
+    synchronized(whisperModelLock) {
+      cachedWhisperModel = loaded
+    }
+    return loaded
+  }
+
+  /**
+   * Runs on-device Whisper speech recognition on a PCM `.wav` file using the bundled
+   * `ggml-tiny-q5_1.bin` quantized model.
+   */
+  suspend fun transcribeWavWithWhisper(
+    context: Context,
+    wavFile: File,
+    defaultTitle: String = "Audio Transcript",
+  ): SpeechTranscriptDocument? {
+    if (!wavFile.exists() || wavFile.length() <= 44L) return null
+    val model = getOrLoadWhisperModel(context) ?: return null
+    return try {
+      val cpuCores = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+      val config = WhisperConfig(
+        language = "auto",
+        translate = false,
+        threads = cpuCores,
+      )
+      val result = Whisper.transcribe(
+        model = model,
+        audioPath = wavFile.absolutePath,
+        config = config,
+      )
+      val segments = result.segments.mapNotNull { seg ->
+        val cleaned = seg.text.trim()
+        if (cleaned.isEmpty()) {
+          null
+        } else {
+          SpeechTranscriptSegment(
+            startMs = seg.startMs.coerceAtLeast(0L),
+            endMs = maxOf(seg.endMs, seg.startMs + 500L),
+            text = cleaned,
+          )
+        }
+      }
+      val fullText = result.text.trim().ifEmpty {
+        segments.joinToString(" ") { it.text }.trim()
+      }
+      SpeechTranscriptDocument(
+        rawText = fullText,
+        segments = if (segments.isNotEmpty()) {
+          segments
+        } else if (fullText.isNotEmpty()) {
+          listOf(SpeechTranscriptSegment(startMs = 0L, endMs = 5000L, text = fullText))
+        } else {
+          emptyList()
+        },
+        title = defaultTitle.ifBlank { "Audio Transcript" },
+      )
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Formats a [SpeechTranscriptDocument] into plain text (`TXT`), SubRip subtitles (`SRT`),
+   * Markdown (`MD`), HTML (`HTML`), or structured data (`JSON`, `CSV`, `TSV`, `XML`).
+   */
+  fun formatSpeechTranscript(
+    transcript: SpeechTranscriptDocument,
+    targetFormat: ConvertibleFormat,
+    defaultTitle: String = "Audio Transcript",
+  ): String {
+    val cleanTitle = transcript.title.trim().ifEmpty { defaultTitle.trim().ifEmpty { "Audio Transcript" } }
+    val effectiveSegments = transcript.segments.filter { it.text.isNotBlank() }.ifEmpty {
+      val fallbackText = transcript.rawText.trim()
+      if (fallbackText.isNotEmpty()) {
+        listOf(SpeechTranscriptSegment(startMs = 0L, endMs = 5000L, text = fallbackText))
+      } else {
+        emptyList()
+      }
+    }
+    val fullText = transcript.rawText.trim().ifEmpty {
+      effectiveSegments.joinToString(" ") { it.text.trim() }.trim()
+    }
+
+    return when (targetFormat) {
+      ConvertibleFormat.TXT -> {
+        fullText.ifEmpty { "(No speech detected)" }
+      }
+
+      ConvertibleFormat.SRT -> {
+        if (effectiveSegments.isEmpty()) {
+          "1\n00:00:00,000 --> 00:00:02,000\n(No speech detected)\n"
+        } else {
+          buildString {
+            effectiveSegments.forEachIndexed { index, seg ->
+              if (index > 0) appendLine()
+              appendLine("${index + 1}")
+              val endMs = maxOf(seg.endMs, seg.startMs + 250L)
+              appendLine("${formatSrtTimestamp(seg.startMs)} --> ${formatSrtTimestamp(endMs)}")
+              appendLine(seg.text.trim())
+            }
+          }
+        }
+      }
+
+      ConvertibleFormat.MD -> {
+        buildString {
+          appendLine("# $cleanTitle")
+          appendLine()
+          if (fullText.isNotEmpty()) {
+            appendLine(fullText)
+          } else {
+            appendLine("*(No speech detected)*")
+          }
+          if (effectiveSegments.size > 1) {
+            appendLine()
+            appendLine("## Timestamped Segments")
+            appendLine()
+            for (seg in effectiveSegments) {
+              appendLine("- **[${formatHumanTimestamp(seg.startMs)} – ${formatHumanTimestamp(seg.endMs)}]** ${seg.text.trim()}")
+            }
+          }
+        }
+      }
+
+      ConvertibleFormat.HTML -> {
+        buildString {
+          appendLine("<!DOCTYPE html>")
+          appendLine("<html><head><meta charset=\"UTF-8\"><title>${escapeXml(cleanTitle)}</title></head><body>")
+          appendLine("<article class=\"speech-transcript\">")
+          appendLine("  <h1>${escapeXml(cleanTitle)}</h1>")
+          if (effectiveSegments.isNotEmpty()) {
+            for (seg in effectiveSegments) {
+              val rangeLabel = "${formatHumanTimestamp(seg.startMs)} – ${formatHumanTimestamp(seg.endMs)}"
+              appendLine("  <p data-start-ms=\"${seg.startMs}\" data-end-ms=\"${seg.endMs}\"><time>${escapeXml(rangeLabel)}</time> ${escapeXml(seg.text.trim())}</p>")
+            }
+          } else {
+            appendLine("  <p>${escapeXml(fullText.ifEmpty { "(No speech detected)" })}</p>")
+          }
+          appendLine("</article>")
+          appendLine("</body></html>")
+        }
+      }
+
+      ConvertibleFormat.JSON,
+      ConvertibleFormat.CSV,
+      ConvertibleFormat.TSV,
+      ConvertibleFormat.XML -> {
+        val rows = extractSpeechTranscriptStructuredRows(effectiveSegments, cleanTitle, fullText)
+        formatStructuredRows(rows, targetFormat)
+      }
+
+      else -> fullText.ifEmpty { cleanTitle }
+    }
+  }
+
+  internal fun extractSpeechTranscriptStructuredRows(
+    segments: List<SpeechTranscriptSegment>,
+    title: String,
+    fallbackText: String,
+  ): List<Map<String, String>> {
+    if (segments.isEmpty()) {
+      return listOf(
+        linkedMapOf(
+          "segment" to "1",
+          "start_ms" to "0",
+          "end_ms" to "0",
+          "start_time" to "00:00:00,000",
+          "end_time" to "00:00:00,000",
+          "title" to title,
+          "text" to fallbackText,
+        )
+      )
+    }
+    return segments.mapIndexed { idx, seg ->
+      val endMs = maxOf(seg.endMs, seg.startMs)
+      linkedMapOf(
+        "segment" to (idx + 1).toString(),
+        "start_ms" to seg.startMs.toString(),
+        "end_ms" to endMs.toString(),
+        "start_time" to formatSrtTimestamp(seg.startMs),
+        "end_time" to formatSrtTimestamp(endMs),
+        "title" to title,
+        "text" to seg.text.trim(),
+      )
+    }
+  }
+
+  fun formatSrtTimestamp(ms: Long): String {
+    val safeMs = ms.coerceAtLeast(0L)
+    val hours = safeMs / 3_600_000L
+    val minutes = (safeMs % 3_600_000L) / 60_000L
+    val seconds = (safeMs % 60_000L) / 1_000L
+    val millis = safeMs % 1_000L
+    return String.format(Locale.US, "%02d:%02d:%02d,%03d", hours, minutes, seconds, millis)
+  }
+
+  private fun formatHumanTimestamp(ms: Long): String {
+    val safeMs = ms.coerceAtLeast(0L)
+    val hours = safeMs / 3_600_000L
+    val minutes = (safeMs % 3_600_000L) / 60_000L
+    val seconds = (safeMs % 60_000L) / 1_000L
+    return if (hours > 0L) {
+      String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+    } else {
+      String.format(Locale.US, "%02d:%02d", minutes, seconds)
+    }
+  }
+
+  /**
+   * Parses a SubRip (`.srt`) subtitle string into a [SpeechTranscriptDocument].
+   */
+  fun parseSrtToSpeechTranscript(
+    srtContent: String,
+    defaultTitle: String = "Subtitle Transcript",
+  ): SpeechTranscriptDocument {
+    val blocks = srtContent.replace("\r\n", "\n").trim().split(Regex("\n\\s*\n"))
+    val timeRegex = Regex("""(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})""")
+    val segments = mutableListOf<SpeechTranscriptSegment>()
+
+    for (block in blocks) {
+      val lines = block.lines().map { it.trim() }.filter { it.isNotEmpty() }
+      if (lines.isEmpty()) continue
+      val timeLineIdx = lines.indexOfFirst { timeRegex.containsMatchIn(it) }
+      if (timeLineIdx >= 0) {
+        val match = timeRegex.find(lines[timeLineIdx]) ?: continue
+        val startMs = parseHmsMillis(
+          match.groupValues[1],
+          match.groupValues[2],
+          match.groupValues[3],
+          match.groupValues[4],
+        )
+        val endMs = parseHmsMillis(
+          match.groupValues[5],
+          match.groupValues[6],
+          match.groupValues[7],
+          match.groupValues[8],
+        )
+        val text = lines.drop(timeLineIdx + 1).joinToString(" ").trim()
+        if (text.isNotEmpty()) {
+          segments.add(SpeechTranscriptSegment(startMs = startMs, endMs = endMs, text = text))
+        }
+      }
+    }
+
+    val rawText = if (segments.isNotEmpty()) {
+      segments.joinToString(" ") { it.text }
+    } else {
+      srtContent.lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.all { ch -> ch.isDigit() } && !timeRegex.containsMatchIn(it) }
+        .joinToString(" ")
+    }
+    return SpeechTranscriptDocument(
+      rawText = rawText,
+      segments = segments,
+      title = defaultTitle.ifBlank { "Subtitle Transcript" },
+    )
+  }
+
+  private fun parseHmsMillis(h: String, m: String, s: String, ms: String): Long {
+    val hours = h.toLongOrNull() ?: 0L
+    val minutes = m.toLongOrNull() ?: 0L
+    val seconds = s.toLongOrNull() ?: 0L
+    val millis = ms.toLongOrNull() ?: 0L
+    return hours * 3_600_000L + minutes * 60_000L + seconds * 1_000L + millis
   }
 
   private fun formatStructuredRows(
@@ -3027,24 +3473,28 @@ object FileConverterEngine {
   // ============================================================================
 
   private suspend fun executeFfmpegConversion(
+    context: Context? = null,
     sourceFile: File,
     outputFile: File,
     sourceFormat: ConvertibleFormat,
     targetFormat: ConvertibleFormat,
     ffmpegRunner: (suspend (List<String>, File) -> Boolean)?,
     ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)? = null,
+    speechToTextRunner: (suspend (File, ConvertibleFormat) -> SpeechTranscriptDocument)? = null,
   ): Boolean {
     // Special case: Image -> PDF fallback via FFmpeg (decode to temporary PNG via FFmpeg, then wrap in PDF)
     if (targetFormat == ConvertibleFormat.PDF && sourceFormat.category == ConversionMediaCategory.IMAGE) {
       val tempPng = File.createTempFile("ffmpeg_img_", ".png", outputFile.parentFile)
       try {
         val decoded = executeFfmpegConversion(
+          context = context,
           sourceFile = sourceFile,
           outputFile = tempPng,
           sourceFormat = sourceFormat,
           targetFormat = ConvertibleFormat.PNG,
           ffmpegRunner = ffmpegRunner,
           ocrRunner = ocrRunner,
+          speechToTextRunner = speechToTextRunner,
         )
         if (!decoded || !tempPng.exists()) return false
         return convertImageToPdfNative(tempPng, outputFile)
@@ -3061,12 +3511,14 @@ object FileConverterEngine {
       val tempPng = File.createTempFile("ffmpeg_ocr_", ".png", outputFile.parentFile)
       try {
         val decoded = executeFfmpegConversion(
+          context = context,
           sourceFile = sourceFile,
           outputFile = tempPng,
           sourceFormat = sourceFormat,
           targetFormat = ConvertibleFormat.PNG,
           ffmpegRunner = ffmpegRunner,
           ocrRunner = ocrRunner,
+          speechToTextRunner = speechToTextRunner,
         )
         if (!decoded || !tempPng.exists()) return false
         return convertImageToDocumentOcrNative(
@@ -3079,6 +3531,52 @@ object FileConverterEngine {
         )
       } finally {
         tempPng.delete()
+      }
+    }
+
+    // Special case: Audio / Video -> Document / Subtitle via FFmpeg + Whisper Speech-to-Text
+    // (decode audio track to 16 kHz mono PCM WAV via FFmpeg, then transcribe with on-device Whisper)
+    if (
+      targetFormat in SPEECH_TO_TEXT_TARGET_FORMATS &&
+      (sourceFormat.category == ConversionMediaCategory.AUDIO || sourceFormat.category == ConversionMediaCategory.VIDEO)
+    ) {
+      val tempWav = File.createTempFile("ffmpeg_whisper_", ".wav", outputFile.parentFile)
+      try {
+        val sttWavArgs = listOf(
+          "-y",
+          "-i",
+          sourceFile.absolutePath,
+          "-vn",
+          "-c:a",
+          "pcm_s16le",
+          "-ar",
+          "16000",
+          "-ac",
+          "1",
+          tempWav.absolutePath,
+        )
+        val decoded = if (ffmpegRunner != null) {
+          ffmpegRunner(sttWavArgs, tempWav)
+        } else {
+          try {
+            val session = FFmpegKit.executeWithArguments(sttWavArgs.toTypedArray())
+            ReturnCode.isSuccess(session.returnCode) && tempWav.exists() && tempWav.length() > 44L
+          } catch (_: Throwable) {
+            false
+          }
+        }
+        if (!decoded || !tempWav.exists()) return false
+        return convertMediaToSpeechToTextNative(
+          context = context,
+          sourceFile = tempWav,
+          outputFile = outputFile,
+          sourceFormat = ConvertibleFormat.WAV,
+          targetFormat = targetFormat,
+          defaultTitle = extractFileStem(sourceFile.name),
+          speechToTextRunner = speechToTextRunner,
+        )
+      } finally {
+        tempWav.delete()
       }
     }
 

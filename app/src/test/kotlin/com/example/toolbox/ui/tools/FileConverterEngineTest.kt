@@ -574,4 +574,130 @@ class FileConverterEngineTest {
     assertTrue(csvContent.contains("Welcome to the handbook."))
     assertTrue(csvContent.contains("Configure settings and shortcuts."))
   }
+
+  @Test
+  fun capabilityMap_includesWhisperSpeechToTextRoutesForAllAudioAndVideoFormats() {
+    val sttTargets = listOf(
+      ConvertibleFormat.TXT,
+      ConvertibleFormat.SRT,
+      ConvertibleFormat.MD,
+      ConvertibleFormat.HTML,
+      ConvertibleFormat.JSON,
+      ConvertibleFormat.CSV,
+      ConvertibleFormat.TSV,
+      ConvertibleFormat.XML,
+    )
+
+    for (target in sttTargets) {
+      // Standard decodable audio (MP3, WAV, M4A, etc.) uses NATIVE primary + FFMPEG backup
+      val mp3Route = FileConverterEngine.getRoute(ConvertibleFormat.MP3, target)
+      assertNotNull("Expected MP3 -> ${target.name} STT route", mp3Route)
+      assertEquals(ConverterBackend.NATIVE, mp3Route!!.preferredBackend)
+      assertEquals(ConverterBackend.FFMPEG, mp3Route.fallbackBackend)
+      assertTrue("Expected MP3 -> ${target.name} to be marked usesSpeechToText", mp3Route.usesSpeechToText)
+
+      val wavRoute = FileConverterEngine.getRoute(ConvertibleFormat.WAV, target)
+      assertNotNull("Expected WAV -> ${target.name} STT route", wavRoute)
+      assertEquals(ConverterBackend.NATIVE, wavRoute!!.preferredBackend)
+      assertTrue(wavRoute.usesSpeechToText)
+
+      // WMA / AIFF use FFMPEG decode + Whisper STT
+      val wmaRoute = FileConverterEngine.getRoute(ConvertibleFormat.WMA, target)
+      assertNotNull("Expected WMA -> ${target.name} STT route", wmaRoute)
+      assertEquals(ConverterBackend.FFMPEG, wmaRoute!!.preferredBackend)
+      assertTrue(wmaRoute.usesSpeechToText)
+
+      // Video formats (MP4, MKV, etc.) use NATIVE primary + FFMPEG backup for Whisper STT
+      val mp4Route = FileConverterEngine.getRoute(ConvertibleFormat.MP4, target)
+      assertNotNull("Expected MP4 -> ${target.name} STT route", mp4Route)
+      assertEquals(ConverterBackend.NATIVE, mp4Route!!.preferredBackend)
+      assertEquals(ConverterBackend.FFMPEG, mp4Route.fallbackBackend)
+      assertTrue(mp4Route.usesSpeechToText)
+    }
+
+    assertEquals(ConvertibleFormat.SRT, ConvertibleFormat.fromFileName("captions.srt"))
+    assertEquals(ConvertibleFormat.SRT, ConvertibleFormat.fromFileName("captions.subrip"))
+  }
+
+  @Test
+  fun convertFile_audioAndVideoSpeechToTextToTxtSrtMdHtmlJsonCsvAndSrtRoundTrip() = runTest {
+    val audioFile = File(tempDir, "interview_clip.mp3").apply {
+      writeBytes(byteArrayOf(0x49, 0x44, 0x33, 0x03))
+    }
+
+    val mockTranscript = SpeechTranscriptDocument(
+      rawText = "Hello and welcome to Toolbox. Today we are testing offline Whisper speech to text.",
+      segments = listOf(
+        SpeechTranscriptSegment(
+          startMs = 0L,
+          endMs = 2450L,
+          text = "Hello and welcome to Toolbox.",
+        ),
+        SpeechTranscriptSegment(
+          startMs = 2450L,
+          endMs = 6800L,
+          text = "Today we are testing offline Whisper speech to text.",
+        ),
+      ),
+      title = "interview_clip",
+    )
+
+    val sttRunner: suspend (File, ConvertibleFormat) -> SpeechTranscriptDocument = { _, _ ->
+      mockTranscript
+    }
+
+    // 1. Audio (MP3) -> TXT
+    val toTxt = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = audioFile,
+      targetFormat = ConvertibleFormat.TXT,
+      outputDir = tempDir,
+      speechToTextRunner = sttRunner,
+    )
+    assertTrue(toTxt.success)
+    val txtContent = toTxt.outputFile!!.readText()
+    assertTrue(txtContent.contains("Hello and welcome to Toolbox."))
+    assertTrue(txtContent.contains("Today we are testing offline Whisper speech to text."))
+
+    // 2. Audio (MP3) -> SRT (SubRip timestamped subtitles)
+    val toSrt = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = audioFile,
+      targetFormat = ConvertibleFormat.SRT,
+      outputDir = tempDir,
+      speechToTextRunner = sttRunner,
+    )
+    assertTrue(toSrt.success)
+    val srtFile = toSrt.outputFile!!
+    val srtContent = srtFile.readText()
+    assertTrue(srtContent.contains("00:00:00,000 --> 00:00:02,450"))
+    assertTrue(srtContent.contains("00:00:02,450 --> 00:00:06,800"))
+    assertTrue(srtContent.contains("Hello and welcome to Toolbox."))
+
+    // 3. SRT -> TXT & SRT -> JSON round-trip
+    val srtToTxt = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = srtFile,
+      targetFormat = ConvertibleFormat.TXT,
+      outputDir = tempDir,
+      desiredStem = "from_srt",
+    )
+    assertTrue(srtToTxt.success)
+    assertTrue(srtToTxt.outputFile!!.readText().contains("Today we are testing offline Whisper speech to text."))
+
+    // 4. Audio (MP3) -> MD, HTML, JSON, CSV
+    for (fmt in listOf(ConvertibleFormat.MD, ConvertibleFormat.HTML, ConvertibleFormat.JSON, ConvertibleFormat.CSV)) {
+      val res = FileConverterEngine.convertFile(
+        context = null,
+        sourceFile = audioFile,
+        targetFormat = fmt,
+        outputDir = tempDir,
+        speechToTextRunner = sttRunner,
+      )
+      assertTrue("Expected MP3 -> ${fmt.name} STT conversion to succeed", res.success)
+      val outText = res.outputFile!!.readText()
+      assertTrue(outText.contains("Hello and welcome to Toolbox."))
+      assertTrue(outText.contains("Today we are testing offline Whisper speech to text."))
+    }
+  }
 }

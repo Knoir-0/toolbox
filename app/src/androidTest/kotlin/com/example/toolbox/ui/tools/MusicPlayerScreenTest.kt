@@ -1789,5 +1789,12 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("song_time_badge_sample_neon_horizon").assertIsDisplayed()
     composeTestRule.onNodeWithTag("favorite_song_sample_neon_horizon").assertIsDisplayed()
     composeTestRule.onNodeWithTag("song_more_sample_neon_horizon").assertIsDisplayed()
+
+    // Switch Albums tab (in Card view) and verify overlaid favorite star, context menu (...), and play button
+    composeTestRule.onNodeWithTag("music_tab_ALBUMS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("favorite_album_Synthwave Sessions").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("album_more_Synthwave Sessions").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("play_album_Synthwave Sessions").assertIsDisplayed()
   }
 }

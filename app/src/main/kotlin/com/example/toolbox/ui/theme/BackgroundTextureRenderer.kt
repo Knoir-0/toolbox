@@ -604,6 +604,7 @@ fun IconButton(
     onClick = onClick,
     modifier = modifier.clip(effectiveShape),
     enabled = enabled,
+    shape = effectiveShape,
     colors = colors,
     interactionSource = interactionSource,
     content = content,

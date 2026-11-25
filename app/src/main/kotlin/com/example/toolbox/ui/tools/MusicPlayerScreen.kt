@@ -7810,6 +7810,7 @@ private fun SongContextMenuButton(
   Box(modifier = modifier) {
     IconButton(
       onClick = { expanded = true },
+      shape = CircleShape,
       colors = IconButtonDefaults.iconButtonColors(
         containerColor = containerColor,
         contentColor = tint,
@@ -7992,6 +7993,7 @@ private fun MusicCollectionContextMenuButton(
   Box(modifier = modifier) {
     IconButton(
       onClick = { expanded = true },
+      shape = CircleShape,
       colors = IconButtonDefaults.iconButtonColors(
         containerColor = containerColor,
         contentColor = tint,
