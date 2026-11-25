@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -627,12 +628,13 @@ fun TerminalScreen(
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 12.dp)
             .testTag("terminal_extra_keys_row"),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          horizontalArrangement = Arrangement.spacedBy(3.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
           val hexagonEnabled = currentHexagonIconButtons()
           TerminalExtraKey.entries.forEach { key ->
             val isCtrlC = key == TerminalExtraKey.CTRL_C
+            val isCompactKey = key.label.length <= 2
             Surface(
               onClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -701,12 +703,13 @@ fun TerminalScreen(
                 MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
               ),
               modifier = Modifier
-                .height(30.dp)
+                .height(32.dp)
+                .widthIn(min = if (isCompactKey) 42.dp else 48.dp)
                 .testTag("extra_key_${key.name}"),
             ) {
               Box(
                 contentAlignment = Alignment.Center,
-                modifier = Modifier.padding(horizontal = 11.dp),
+                modifier = Modifier.padding(horizontal = if (isCompactKey) 14.dp else 11.dp),
               ) {
                 Text(
                   text = key.label,
@@ -1045,7 +1048,7 @@ private fun WirelessAdbStatusBanner(
           text = if (isConnected) {
             "Wireless ADB Active • $host:$connectPort"
           } else {
-            "Option 3: Wireless ADB Loopback ($host:$connectPort)"
+            "Wireless ADB Loopback ($host:$connectPort)"
           },
           style = MaterialTheme.typography.bodyMedium,
           fontWeight = FontWeight.SemiBold,
@@ -1521,7 +1524,7 @@ private fun WirelessAdbSetupDialog(
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Option 3 • Loopback adbd (uid=2000)",
+            text = "Loopback adbd (uid=2000)",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )

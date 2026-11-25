@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.CropOriginal
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Mood
@@ -207,8 +208,8 @@ enum class Tool(
     screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
   PDF_VIEWER(
-    title = "PDF Viewer",
-    icon = Icons.Default.PictureAsPdf,
+    title = "Document Viewer",
+    icon = Icons.Default.Description,
     category = ToolCategory.FILES,
     screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
   ),
@@ -303,6 +304,7 @@ enum class Tool(
 
   companion object {
     val ARCHIVES: Tool get() = ARCHIVE
+    val DOCUMENT_VIEWER: Tool get() = PDF_VIEWER
     val IMAGE_VIEWER: Tool get() = IMAGE
     val MUSIC_PLAYER: Tool get() = MUSIC
     val RECIPE_BOOK: Tool get() = RECIPES

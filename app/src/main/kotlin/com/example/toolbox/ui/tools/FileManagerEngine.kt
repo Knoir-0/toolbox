@@ -228,6 +228,9 @@ object FileManagerEngine {
     "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "epub" to "application/epub+zip",
     "rtf" to "application/rtf",
+    "odt" to "application/vnd.oasis.opendocument.text",
+    "ods" to "application/vnd.oasis.opendocument.spreadsheet",
+    "odp" to "application/vnd.oasis.opendocument.presentation",
   )
 
   /**
@@ -323,6 +326,11 @@ object FileManagerEngine {
   fun isPdfFile(file: File): Boolean {
     if (file.isDirectory) return false
     return file.extension.lowercase(Locale.ROOT) == "pdf"
+  }
+
+  fun isDocumentViewerFile(file: File): Boolean {
+    if (file.isDirectory) return false
+    return DocumentViewerEngine.isSupportedDocumentFile(file)
   }
 
   fun isApkFile(file: File): Boolean {
@@ -1722,7 +1730,7 @@ object FileManagerEngine {
       return targetFile
     }
     try {
-      PdfViewerEngine.generateSamplePdfFile(targetFile)
+      DocumentViewerEngine.generateSamplePdfFile(targetFile)
     } catch (_: Throwable) {}
     if (!targetFile.exists() || targetFile.length() == 0L) {
       targetFile.writeText(

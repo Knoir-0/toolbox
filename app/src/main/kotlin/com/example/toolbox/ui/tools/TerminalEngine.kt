@@ -879,7 +879,7 @@ class TerminalPreferencesRepository(
   private val prefs = context?.getSharedPreferences(TERMINAL_PREFERENCES_NAME, Context.MODE_PRIVATE)
 
   private var inMemoryBackend = TerminalBackendMode.LOCAL_SHELL
-  private var inMemoryFavorites = mutableSetOf("sys_uname", "sys_id", "net_ip_addr", "storage_df", "dump_battery")
+  private var inMemoryFavorites = mutableSetOf<String>()
   private var inMemoryCustomCommands = mutableListOf<TerminalCommandPreset>()
   private var inMemoryCommandHistory = mutableListOf<String>()
   private var inMemoryAdbHost = DEFAULT_TERMINAL_ADB_HOST

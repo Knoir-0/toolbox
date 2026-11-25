@@ -383,6 +383,12 @@ class CrossToolFileHostState {
   var fileForArchive by mutableStateOf<File?>(null)
   var filesForArchiveCompression by mutableStateOf<List<File>?>(null)
   var fileForPdfViewer by mutableStateOf<File?>(null)
+
+  var fileForDocumentViewer: File?
+    get() = fileForPdfViewer
+    set(value) {
+      fileForPdfViewer = value
+    }
   var fileForMusicPlayer by mutableStateOf<File?>(null)
   var fileForGallery by mutableStateOf<File?>(null)
   var colorHexForColorPicker by mutableStateOf<String?>(null)
@@ -557,7 +563,7 @@ fun CrossToolFileHostState.RenderSubScreen(
   val activePdfViewerFile = fileForPdfViewer
   if (activePdfViewerFile != null) {
     SyncToolScreenOrientation(tool = Tool.PDF_VIEWER, restorePreviousOnDispose = true)
-    PdfViewerScreen(
+    DocumentViewerScreen(
       modifier = modifier,
       initialFile = activePdfViewerFile,
       initialDirectory = activePdfViewerFile.parentFile ?: defaultDirectory,

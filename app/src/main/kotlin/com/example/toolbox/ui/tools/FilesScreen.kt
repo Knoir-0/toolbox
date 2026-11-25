@@ -862,7 +862,7 @@ fun FilesScreen(
 
   val activePdfViewerFile = fileForPdfViewer
   if (activePdfViewerFile != null) {
-    PdfViewerScreen(
+    DocumentViewerScreen(
       modifier = modifier,
       initialFile = activePdfViewerFile,
       initialDirectory = currentDirectory,
@@ -2260,10 +2260,10 @@ private fun FilesHeader(
                   modifier = Modifier.testTag("action_selection_open_archive"),
                 )
               }
-              if (singleSelectedFile != null && onOpenSelectedPdf != null && FileManagerEngine.isPdfFile(singleSelectedFile)) {
+              if (singleSelectedFile != null && onOpenSelectedPdf != null && FileManagerEngine.isDocumentViewerFile(singleSelectedFile)) {
                 DropdownMenuItem(
-                  text = { Text("PDF Viewer") },
-                  leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
+                  text = { Text("Document Viewer") },
+                  leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
                     onOpenSelectedPdf(singleSelectedFile)
@@ -3383,10 +3383,10 @@ private fun FileActionMenu(
           modifier = Modifier.testTag("action_open_archive"),
         )
       }
-      if (FileManagerEngine.isPdfFile(item.file)) {
+      if (FileManagerEngine.isDocumentViewerFile(item.file)) {
         DropdownMenuItem(
-          text = { Text("PDF Viewer") },
-          leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
+          text = { Text("Document Viewer") },
+          leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
           onClick = onOpenPdf,
           modifier = Modifier.testTag("action_open_pdf"),
         )

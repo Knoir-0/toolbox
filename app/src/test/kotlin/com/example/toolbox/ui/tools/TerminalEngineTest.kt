@@ -117,8 +117,11 @@ class TerminalEngineTest {
   @Test
   fun catalogFilter_filtersByQueryCategoryAndFavorites() {
     val repo = TerminalPreferencesRepository(context = null)
-    val favs = repo.loadFavoriteCommandIds()
-    assertTrue(favs.isNotEmpty())
+    val initialFavs = repo.loadFavoriteCommandIds()
+    assertTrue(initialFavs.isEmpty())
+
+    val favs = repo.toggleFavoriteCommand("dump_battery")
+    assertTrue(favs.contains("dump_battery"))
 
     val allResults = TerminalCatalog.filterPresets(
       query = "",

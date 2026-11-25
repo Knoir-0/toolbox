@@ -147,8 +147,8 @@ import com.example.toolbox.ui.tools.ImageScreen
 import com.example.toolbox.ui.tools.MetronomeScreen
 import com.example.toolbox.ui.tools.MusicPlayerScreen
 import com.example.toolbox.ui.tools.NotesScreen
+import com.example.toolbox.ui.tools.DocumentViewerScreen
 import com.example.toolbox.ui.tools.Obd2ScannerScreen
-import com.example.toolbox.ui.tools.PdfViewerScreen
 import com.example.toolbox.ui.tools.PlantScheduleScreen
 import com.example.toolbox.ui.tools.RecipeBookScreen
 import com.example.toolbox.ui.tools.RulerScreen
@@ -2804,7 +2804,7 @@ fun ToolContentView(
         onOpenColorPicker = onOpenColorPicker,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
-      Tool.PDF_VIEWER -> PdfViewerScreen(
+      Tool.PDF_VIEWER -> DocumentViewerScreen(
         initialFile = initialFile?.takeIf { it.isFile },
         initialDirectory = effectiveDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),

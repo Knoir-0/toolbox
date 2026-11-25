@@ -1078,8 +1078,8 @@ class MainScreenTest {
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
 
-      // PDF file menu shows PDF Viewer button (action_open_pdf) and opens PdfViewerScreen
-      com.example.toolbox.ui.tools.PdfViewerEngine.generateSamplePdfFile(java.io.File(dcimDir, "doc.pdf"))
+      // Document file menu shows Document Viewer button (action_open_pdf) and opens DocumentViewerScreen
+      com.example.toolbox.ui.tools.DocumentViewerEngine.generateSamplePdfFile(java.io.File(dcimDir, "doc.pdf"))
       setTestContent {
         com.example.toolbox.ui.tools.FilesScreen(initialDirectory = dcimDir)
       }

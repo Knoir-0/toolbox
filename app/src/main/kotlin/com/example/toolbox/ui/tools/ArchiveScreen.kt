@@ -2478,7 +2478,7 @@ private fun ArchiveEntryActionMenu(
   onDelete: () -> Unit,
 ) {
   val crossToolActions = LocalArchiveEntryCrossToolActions.current
-  val isPdfEntry = item.extension.equals("pdf", ignoreCase = true)
+  val isDocumentViewerEntry = DocumentViewerEngine.isSupportedDocumentExtension(item.extension)
 
   DropdownMenu(
     expanded = expanded,
@@ -2573,10 +2573,12 @@ private fun ArchiveEntryActionMenu(
           },
           modifier = Modifier.testTag("action_edit_video_entry"),
         )
-      } else if (isPdfEntry) {
+      }
+
+      if (isDocumentViewerEntry) {
         DropdownMenuItem(
-          text = { Text("Open in PDF Viewer") },
-          leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
+          text = { Text("Open in Document Viewer") },
+          leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
           onClick = {
             onDismiss()
             crossToolActions.onOpenInPdfViewer(item)
