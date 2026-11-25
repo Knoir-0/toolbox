@@ -2550,10 +2550,6 @@ object MusicPlayerEngine {
     }
   }
 
-  val DEFAULT_SAVED_SECTION_SORTS: Map<String, MusicSortOrder> = mapOf(
-    sortScopeKeyForTab(MusicLibraryTab.HOME) to MusicSortOrder.RANDOM,
-  )
-
   val DEFAULT_SAVED_SECTION_SORT_GROUPS: Map<String, MusicSortGroupConfig> = mapOf(
     sortScopeKeyForTab(MusicLibraryTab.HOME) to MusicSortGroupConfig(
       groupOption = MusicGroupOption.NONE,
@@ -2630,15 +2626,6 @@ object MusicPlayerEngine {
     return saved.entries.joinToString("\n") { (key, config) ->
       "$key=${config.groupOption.name}:${config.sortOrder.name}"
     }
-  }
-
-  fun parseSavedSectionSorts(rawString: String?): Map<String, MusicSortOrder> {
-    return parseSavedSectionSortGroups(rawString).mapValues { it.value.sortOrder }
-  }
-
-  fun serializeSavedSectionSorts(saved: Map<String, MusicSortOrder>): String {
-    if (saved.isEmpty()) return "__none__"
-    return saved.entries.joinToString("\n") { (key, order) -> "$key=${order.name}" }
   }
 
   /**
@@ -4847,9 +4834,6 @@ object MusicPlayerEngine {
       trimmed in HOME_PLAYLIST_IDS ||
       trimmed.startsWith("home_mix_")
   }
-
-  /** IDs of sample playlists shipped by older versions; stripped from persisted playlists on load. */
-  val LEGACY_SAMPLE_PLAYLIST_IDS: Set<String> = setOf("playlist_synth_night", "playlist_chill_focus")
 
   /**
    * Builds the built-in Favorites [MusicPlaylist] from [favoriteIds], preserving library order.
@@ -10102,14 +10086,6 @@ class MusicPlaybackSession(
     return false
   }
 
-  fun updateTabOrder(newOrder: List<MusicLibraryTab>) {
-    val normalized = MusicPlayerEngine.parseTabOrder(MusicPlayerEngine.serializeTabOrder(newOrder))
-    if (normalized != tabOrder) {
-      tabOrder = normalized
-      persistStringPrefInBackground(PREF_KEY_MUSIC_TAB_ORDER, MusicPlayerEngine.serializeTabOrder(normalized))
-    }
-  }
-
   var selectedTab by mutableStateOf(
     initialTab ?: run {
       val savedTab = prefs?.getString(PREF_KEY_MUSIC_TAB, null)
@@ -10304,9 +10280,6 @@ class MusicPlaybackSession(
     MusicPlayerEngine.parseSavedSectionSortGroups(prefs?.getString(PREF_KEY_MUSIC_SAVED_SECTION_SORTS, null))
   )
     internal set
-
-  val savedSectionSortOrders: Map<String, MusicSortOrder>
-    get() = savedSectionSortGroups.mapValues { it.value.sortOrder }
 
   val currentSortScopeKey: String
     get() = MusicPlayerEngine.resolveSortScopeKey(selectedTab, selectedCustomFolderPath)
@@ -10568,10 +10541,6 @@ class MusicPlaybackSession(
     random: kotlin.random.Random = kotlin.random.Random.Default,
   ) {
     setShuffleMode(shuffleMode.next(), random = random)
-  }
-
-  fun toggleShuffle() {
-    cycleShuffleMode()
   }
 
   var repeatMode by mutableStateOf(
@@ -10877,7 +10846,7 @@ class MusicPlaybackSession(
     viewPlayStats = playStats
     homePlayStats = playStats
     savedPlaylistEntries = MusicPlayerEngine.deserializePlaylists(p.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
-      .filterNot { it.id in MusicPlayerEngine.LEGACY_SAMPLE_PLAYLIST_IDS || it.id in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
+      .filterNot { it.id in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
     customFolders = MusicPlayerEngine.parseCustomFolders(p.getString(PREF_KEY_MUSIC_CUSTOM_FOLDERS, null))
     syncSortOrderWithCurrentScope()
     refreshLibraryDerivedStateAfterMutation(allTracks)
@@ -10886,7 +10855,7 @@ class MusicPlaybackSession(
   //Playlists & Background-Derived Library Collections
   var savedPlaylistEntries by mutableStateOf(
     MusicPlayerEngine.deserializePlaylists(prefs?.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
-      .filterNot { it.id in MusicPlayerEngine.LEGACY_SAMPLE_PLAYLIST_IDS || it.id in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
+      .filterNot { it.id in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
   )
 
   var libraryArtists by mutableStateOf<List<MusicArtist>>(emptyList())
@@ -11563,16 +11532,6 @@ class MusicPlaybackSession(
 
   private var lastCountedPlayTrackId: String? = null
 
-  /**
-   * Returns `true` if a hardware [MediaPlayer] instance is currently playing audio.
-   */
-  val isHardwarePlayerActive: Boolean
-    get() = try {
-      mediaPlayer?.isPlaying == true
-    } catch (_: Throwable) {
-      false
-    }
-
   var isLoadingLibrary by mutableStateOf(false)
     internal set
 
@@ -12099,11 +12058,6 @@ class MusicPlaybackSession(
             } else {
               currentPositionMs = nextPos
             }
-          }
-          if (ticksSinceFlush % 5 == 0 && appContext != null && !isInspection) {
-            val safeDur = trackDurationMs.coerceAtLeast(1L)
-            val permille = ((currentPositionMs.toFloat() / safeDur.toFloat()) * 1000f).roundToInt().coerceIn(0, 1000)
-            MusicPlayerWidgets.updateMiniBarProgressOnly(appContext, permille)
           }
         }
       }

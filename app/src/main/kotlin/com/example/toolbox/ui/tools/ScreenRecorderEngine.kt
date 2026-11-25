@@ -100,22 +100,9 @@ enum class ScreenAudioSource(
   ),
   ;
 
-  fun toAudioCaptureSourceOrNull(): AudioCaptureSource? = when (this) {
-    MICROPHONE -> AudioCaptureSource.MICROPHONE
-    DEVICE_AUDIO -> AudioCaptureSource.DEVICE_AUDIO
-    DEVICE_AND_MIC -> AudioCaptureSource.DEVICE_AND_MIC
-    MUTE -> null
-  }
-
   companion object {
     val DEFAULT: ScreenAudioSource = MICROPHONE
     val MIC: ScreenAudioSource get() = MICROPHONE
-
-    fun fromAudioCaptureSource(source: AudioCaptureSource): ScreenAudioSource = when (source) {
-      AudioCaptureSource.MICROPHONE -> MICROPHONE
-      AudioCaptureSource.DEVICE_AUDIO -> DEVICE_AUDIO
-      AudioCaptureSource.DEVICE_AND_MIC -> DEVICE_AND_MIC
-    }
 
     fun fromNameOrDefault(name: String?): ScreenAudioSource {
       if (name.isNullOrBlank()) return DEFAULT
@@ -210,7 +197,6 @@ data class ScreenRecordingItem(
   val sizeFormatted: String get() = FileManagerEngine.formatFileSize(sizeBytes)
   val timestampFormatted: String get() = FileManagerEngine.formatTimestamp(lastModifiedMs)
   val durationFormatted: String get() = AudioRecorderEngine.formatDurationMs(durationMs)
-  val resolutionFormatted: String get() = if (width > 0 && height > 0) "${width}×${height}" else "1080×1920"
 }
 
 /**
@@ -731,55 +717,6 @@ object ScreenRecorderEngine {
           audioSource = inferAudioSourceFromFileName(file.name),
         )
       }
-  }
-
-  /**
-   * Renders a clean preview thumbnail bitmap for a screen recording card or Video Editor handoff.
-   */
-  fun createRecordingPreviewBitmap(
-    item: ScreenRecordingItem,
-    widthPx: Int = 360,
-    heightPx: Int = 640,
-  ): Bitmap {
-    try {
-      val retriever = MediaMetadataRetriever()
-      try {
-        retriever.setDataSource(item.file.absolutePath)
-        val frame = retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-        if (frame != null) return frame
-      } finally {
-        try {
-          retriever.release()
-        } catch (_: Throwable) {}
-      }
-    } catch (_: Throwable) {}
-
-    val bmp = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bmp)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    paint.shader = LinearGradient(
-      0f,
-      0f,
-      widthPx.toFloat(),
-      heightPx.toFloat(),
-      intArrayOf(
-        AndroidColor.rgb(38, 28, 54),
-        AndroidColor.rgb(66, 44, 92),
-        AndroidColor.rgb(24, 34, 62),
-      ),
-      null,
-      Shader.TileMode.CLAMP,
-    )
-    canvas.drawRect(0f, 0f, widthPx.toFloat(), heightPx.toFloat(), paint)
-    paint.shader = null
-    paint.color = AndroidColor.argb(60, 255, 255, 255)
-    canvas.drawRoundRect(
-      RectF(widthPx * 0.14f, heightPx * 0.18f, widthPx * 0.86f, heightPx * 0.82f),
-      28f,
-      28f,
-      paint,
-    )
-    return bmp
   }
 
   /**

@@ -117,7 +117,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.navigation3.runtime.NavKey
 import androidx.compose.runtime.CompositionLocalProvider
 import com.example.toolbox.ui.theme.LocalBackgroundTexture
 import com.example.toolbox.ui.theme.ToolboxTheme
@@ -589,7 +588,6 @@ fun resolveToolPanelSheetValue(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-  onItemClick: (NavKey) -> Unit = {},
   standaloneTool: Tool? = null,
   initialFile: File? = null,
   initialDirectory: File? = null,

@@ -37,6 +37,7 @@ import com.example.toolbox.ui.main.EXTRA_NOTES_QUICK_CAPTURE_MODE
 import com.example.toolbox.ui.main.EXTRA_PLANT_SCHEDULE_MONTH
 import com.example.toolbox.ui.main.EXTRA_PLANT_SCHEDULE_OPEN_SEARCH
 import com.example.toolbox.ui.main.EXTRA_TODO_QUICK_ACTION_MODE
+import com.example.toolbox.ui.main.MainScreen
 import com.example.toolbox.ui.main.NOTES_FILTER_MODE_ALL
 import com.example.toolbox.ui.main.NOTES_FILTER_MODE_LABEL
 import com.example.toolbox.ui.main.NOTES_FILTER_MODE_PINNED
@@ -344,7 +345,7 @@ class MainActivity : ComponentActivity() {
         hexagonIconButtons = hexagonIconButtons,
       ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-          MainNavigation(
+          MainScreen(
             standaloneTool = standaloneTool,
             initialFile = initialFile,
             initialDirectory = initialFolder?.let { File(it) },

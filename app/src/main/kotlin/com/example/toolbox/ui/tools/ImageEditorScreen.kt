@@ -2852,33 +2852,6 @@ fun saveBitmapToGallery(
   return null
 }
 
-fun shareBitmap(
-  context: Context,
-  bitmap: Bitmap,
-  metadata: ImageMetadata = ImageMetadata(),
-) {
-  try {
-    val cachePath = File(context.cacheDir, "images")
-    cachePath.mkdirs()
-    val file = File(cachePath, "shared_image.png")
-    FileOutputStream(file).use { out ->
-      bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-    }
-    if (!metadata.sanitized().isEmpty) {
-      ImageMetadataOperations.writeImageMetadata(file, metadata.sanitized())
-    }
-    CrossToolActions.shareFile(
-      context = context,
-      file = file,
-      mimeTypeOverride = "image/png",
-      chooserTitle = "Share Image",
-    )
-  } catch (e: Exception) {
-    e.printStackTrace()
-    Toast.makeText(context, "Could not share image", Toast.LENGTH_SHORT).show()
-  }
-}
-
 @Preview(showBackground = true)
 @Composable
 fun OpenFileInitialViewPreview() {

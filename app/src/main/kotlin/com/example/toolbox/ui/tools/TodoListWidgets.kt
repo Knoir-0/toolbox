@@ -99,9 +99,7 @@ data class TodoWidgetPalette(
   val secondaryArgb: Int = primaryArgb,
   val tertiaryArgb: Int = primaryArgb,
   val isDarkTheme: Boolean = true,
-) {
-  val itemSurfaceArgb: Int get() = itemCardArgb
-}
+)
 
 /**
  * Central state resolver, RemoteViews builder, and action handler for the To-Do List Home Screen
@@ -632,20 +630,6 @@ object TodoListWidgets {
 
     return restored
   }
-
-  /**
-   * Alias for [undoFromWidget].
-   */
-  fun undoLastCompletedTaskFromWidget(
-    context: Context?,
-    repository: TodoListRepository? = context?.let { SharedPreferencesTodoListRepository(it) },
-    nowMillis: Long = System.currentTimeMillis(),
-    @Suppress("UNUSED_PARAMETER") showSystemToast: Boolean = false,
-  ): TodoHistorySnapshot? = undoFromWidget(
-    context = context,
-    repository = repository,
-    nowMillis = nowMillis,
-  )
 
   /**
    * Redoes the most recently undone action from the widget's top-right Redo button, pushing the

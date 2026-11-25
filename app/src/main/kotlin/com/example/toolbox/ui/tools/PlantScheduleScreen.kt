@@ -328,24 +328,6 @@ fun PlantScheduleScreen(
     exitSelectionMode()
   }
 
-  fun duplicatePlantsAsCustom(plants: List<PlantItem>) {
-    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    var updatedCustom = customPlants
-    var updatedSchedule = scheduledPlants
-    plants.forEach { original ->
-      val copy = original.copy(
-        id = "custom_${UUID.randomUUID()}",
-        name = "${original.name} (Copy)",
-        isCustom = true,
-      )
-      updatedCustom = listOf(copy) + updatedCustom
-      updatedSchedule = PlantScheduleEngine.addPlantToSchedule(updatedSchedule, copy)
-    }
-    customPlants = updatedCustom
-    repo.saveCustomPlants(updatedCustom)
-    updateSchedule(updatedSchedule)
-  }
-
   fun togglePlant(plant: PlantItem) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     val updated = PlantScheduleEngine.togglePlantInSchedule(scheduledPlants, plant)

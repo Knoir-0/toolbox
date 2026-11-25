@@ -181,7 +181,6 @@ class HomeScreenShortcutsTest {
   @Test
   fun viewerTool_isTitledViewer_andOpenWithAliasesResolveToTools() {
     assertEquals("Viewer", Tool.IMAGE.title)
-    assertEquals(Tool.IMAGE, Tool.IMAGE_VIEWER)
     assertEquals("extra_initial_file_path", EXTRA_INITIAL_FILE_PATH)
 
     val openWithTools = listOf(

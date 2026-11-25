@@ -1258,31 +1258,6 @@ object BackgroundTextureWidgets {
     return views
   }
 
-  /**
-   * Builds the [RemoteViews] for a single horizontal row of [rowTextures] inside the vertically
-   * scrollable [ListView].
-   */
-  fun buildTextureRowRemoteViews(
-    context: Context,
-    rowTextures: List<BackgroundTexture>,
-    activeTexture: BackgroundTexture,
-    columnCount: Int,
-    columnWidthDp: Float = DEFAULT_COLUMN_WIDTH_DP,
-    rowHeightDp: Float = DEFAULT_ROW_HEIGHT_DP,
-    palette: TodoWidgetPalette = TodoListWidgets.resolveWidgetPalette(context),
-  ): RemoteViews {
-    return buildStyleRowRemoteViews(
-      context = context,
-      rowItems = rowTextures.map { StyleWidgetItem.TextureOption(it) },
-      activeTexture = activeTexture,
-      isHexagon = palette.hexagonIconButtons,
-      columnCount = columnCount,
-      columnWidthDp = columnWidthDp,
-      rowHeightDp = rowHeightDp,
-      palette = palette,
-    )
-  }
-
   fun buildSelectTextureTemplatePendingIntent(
     context: Context,
     appWidgetId: Int,

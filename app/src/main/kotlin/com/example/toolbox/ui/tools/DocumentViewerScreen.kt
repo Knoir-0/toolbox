@@ -141,21 +141,6 @@ private val DOCUMENT_PEN_COLORS =
     Color(0xFFFFFFFF), // White
   )
 
-@Composable
-fun PdfViewerScreen(
-  modifier: Modifier = Modifier,
-  initialFile: File? = null,
-  initialDirectory: File? = null,
-  onNavigateBack: (() -> Unit)? = null,
-) {
-  DocumentViewerScreen(
-    modifier = modifier,
-    initialFile = initialFile,
-    initialDirectory = initialDirectory,
-    onNavigateBack = onNavigateBack,
-  )
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DocumentViewerScreen(

@@ -1429,14 +1429,6 @@ class MusicPlayerScreenTest {
       "Expected MusicAlbumArtWidgetProvider to be registered in AppWidgetManager",
       MusicAlbumArtWidgetProvider::class.java.name in providerClasses,
     )
-    assertFalse(
-      "Expected separate MusicMiniBarWidgetProvider not to be registered in AppWidgetManager",
-      MusicMiniBarWidgetProvider::class.java.name in providerClasses,
-    )
-    assertFalse(
-      "Expected separate MusicMediumWidgetProvider not to be registered in AppWidgetManager",
-      MusicMediumWidgetProvider::class.java.name in providerClasses,
-    )
 
     // 2. Start playing the first track and verify responsive RemoteViews switches between Mini Bar,
     //    Medium, and Album Art views based on widget dimensions

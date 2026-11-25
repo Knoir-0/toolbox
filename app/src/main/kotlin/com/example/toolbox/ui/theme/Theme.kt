@@ -828,17 +828,8 @@ fun resolveToolboxColorScheme(
     }
 
     val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColor, darkTheme = darkTheme)
-    val legacyMusicAccentOption = if (musicThemeOption == null && isMusicPlaying) {
-        MusicPlayerColorOption.fromPrefValue(accentColor)
-    } else {
-        null
-    }
     val resolvedAccentColor = when {
         harmonyOption != null -> calculateAccentHarmonyColor(baseColorScheme.primary, harmonyOption)
-        legacyMusicAccentOption != null -> {
-            val musicHarmony = resolveMusicPlayerHarmonyOption(accentColor, darkTheme = darkTheme)
-            calculateAccentHarmonyColor(legacyMusicAccentOption.resolveColor(musicPalette), musicHarmony)
-        }
         else -> parseHexColor(accentColor) ?: calculateAccentHarmonyColor(
             baseColorScheme.primary,
             AccentHarmonyOption.defaultForTheme(darkTheme),
@@ -846,10 +837,9 @@ fun resolveToolboxColorScheme(
     }
 
     val tertiaryTokens = createTertiaryTokens(resolvedAccentColor, darkTheme)
-    val activeMusicOption = musicThemeOption ?: legacyMusicAccentOption
-    return if (activeMusicOption != null) {
-        val musicBaseColor = activeMusicOption.resolveColor(musicPalette)
-        val musicBg = calculateMusicPlayerBackgroundColor(baseColorScheme.background, musicPalette, activeMusicOption)
+    return if (musicThemeOption != null) {
+        val musicBaseColor = musicThemeOption.resolveColor(musicPalette)
+        val musicBg = calculateMusicPlayerBackgroundColor(baseColorScheme.background, musicPalette, musicThemeOption)
         baseColorScheme.copy(
             background = musicBg,
             surface = musicBg,

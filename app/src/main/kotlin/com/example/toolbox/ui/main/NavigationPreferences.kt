@@ -40,7 +40,6 @@ const val PREF_KEY_THEME_COLOR = "theme_color"
 const val PREF_KEY_MUSIC_PLAYER_THEME_ENABLED = "music_player_theme_enabled"
 const val PREF_KEY_MUSIC_PLAYER_COLOR_OPTION = "music_player_color_option"
 const val PREF_KEY_HIDDEN_TOOLS = "hidden_tools"
-const val PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS = "known_default_hidden_tools"
 const val PREF_KEY_TOOL_SORTING = "tool_sorting"
 const val PREF_KEY_TOOL_SORT_ORDER = "tool_sort_order"
 const val PREF_KEY_CATEGORY_SORTING = "category_sorting"
@@ -486,14 +485,6 @@ val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.OBD2_SCANNER,
   Tool.STARS,
   Tool.TERMINAL,
-)
-
-private val LEGACY_DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
-  Tool.FILE_CONVERTER,
-  Tool.IMAGE_EDITOR,
-  Tool.VIDEO_EDITOR,
-  Tool.AUDIO_EDITOR,
-  Tool.DECIBEL_METER,
 )
 
 /**
@@ -1321,20 +1312,12 @@ class DefaultNavigationPreferencesRepository(
 
   override fun getMusicPlayerColorOption(): String {
     val raw = sharedPreferences.getString(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION, null)
-    if (
+    return if (
       raw == THEME_COLOR_MUSIC_PLAYER ||
       raw == THEME_COLOR_MUSIC_SECONDARY ||
       raw == THEME_COLOR_MUSIC_ACCENT
     ) {
-      return raw
-    }
-    val legacyThemeColor = getThemeColor()
-    return if (
-      legacyThemeColor == THEME_COLOR_MUSIC_PLAYER ||
-      legacyThemeColor == THEME_COLOR_MUSIC_SECONDARY ||
-      legacyThemeColor == THEME_COLOR_MUSIC_ACCENT
-    ) {
-      legacyThemeColor
+      raw
     } else {
       DEFAULT_MUSIC_PLAYER_COLOR_OPTION
     }
@@ -1392,7 +1375,6 @@ class DefaultNavigationPreferencesRepository(
   }
 
   override fun getHiddenTools(): Set<Tool> {
-    migrateNewDefaultHiddenToolsIfNeeded()
     val raw = sharedPreferences.getString(PREF_KEY_HIDDEN_TOOLS, null)
     return parseHiddenTools(raw)
   }
@@ -1402,30 +1384,8 @@ class DefaultNavigationPreferencesRepository(
     val serialized = serializeHiddenTools(sanitized)
     sharedPreferences.edit()
       .putString(PREF_KEY_HIDDEN_TOOLS, serialized)
-      .putString(PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS, serializeHiddenTools(DEFAULT_HIDDEN_TOOLS))
       .apply()
     _hiddenToolsFlow.value = sanitized
-  }
-
-  private fun migrateNewDefaultHiddenToolsIfNeeded() {
-    if (!sharedPreferences.contains(PREF_KEY_HIDDEN_TOOLS)) {
-      return
-    }
-    val knownRaw = sharedPreferences.getString(PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS, null)
-    val knownDefaults = if (knownRaw == null) {
-      LEGACY_DEFAULT_HIDDEN_TOOLS
-    } else {
-      parseHiddenTools(knownRaw)
-    }
-    val newlyAddedDefaultHidden = DEFAULT_HIDDEN_TOOLS - knownDefaults
-    if (newlyAddedDefaultHidden.isNotEmpty() || knownRaw == null) {
-      val currentHidden = parseHiddenTools(sharedPreferences.getString(PREF_KEY_HIDDEN_TOOLS, null))
-      val updatedHidden = (currentHidden + newlyAddedDefaultHidden).filter { it != Tool.SETTINGS }.toSet()
-      sharedPreferences.edit()
-        .putString(PREF_KEY_HIDDEN_TOOLS, serializeHiddenTools(updatedHidden))
-        .putString(PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS, serializeHiddenTools(DEFAULT_HIDDEN_TOOLS))
-        .apply()
-    }
   }
 
   override fun getToolSorting(): ToolSortingOption {

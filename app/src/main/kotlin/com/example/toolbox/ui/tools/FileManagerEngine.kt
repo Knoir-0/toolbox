@@ -1862,23 +1862,6 @@ object FileManagerEngine {
     MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.forEach { track ->
       getOrCreateSampleMusicFile(track = track, context = context, samplesRoot = baseDir)
     }
-
-    // Clean up any legacy cache sample directories if context is provided
-    if (context != null) {
-      try {
-        val cacheDir = context.cacheDir
-        val legacyVideo = File(cacheDir, "video_editor_samples/sample_clip.mp4")
-        val targetVideo = getSampleVideoFile(context = context, samplesRoot = baseDir)
-        if (legacyVideo.exists() && legacyVideo.length() > 1024L && !targetVideo.exists()) {
-          legacyVideo.copyTo(targetVideo, overwrite = true)
-        }
-        File(cacheDir, "video_editor_samples").deleteRecursively()
-        File(cacheDir, "sample_archives").deleteRecursively()
-        File(cacheDir, "converter_samples").deleteRecursively()
-        File(cacheDir, "music_player_samples").deleteRecursively()
-        File(cacheDir, "sample_document.pdf").delete()
-      } catch (_: Throwable) {}
-    }
   }
 
   // =========================================================================

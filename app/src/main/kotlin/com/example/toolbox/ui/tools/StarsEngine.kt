@@ -1460,19 +1460,6 @@ val SKY_CONSTELLATIONS: List<SkyConstellation> = listOf(
  */
 val DEFAULT_BIRTH_PROFILES: List<BirthProfile> = emptyList()
 
-private fun isLegacyPrefilledDefaultProfile(profile: BirthProfile): Boolean {
-  return (profile.id == "profile_her_stars" &&
-    profile.name == "My Chart" &&
-    profile.birthYear == 1999 &&
-    profile.birthMonth == 5 &&
-    profile.birthDay == 14) ||
-    (profile.id == "profile_partner_stars" &&
-      profile.name == "Partner" &&
-      profile.birthYear == 1998 &&
-      profile.birthMonth == 10 &&
-      profile.birthDay == 28)
-}
-
 /**
  * Repository interface for persisting birth profiles, active chart selection, and favorite guide items.
  */
@@ -1487,9 +1474,6 @@ interface StarsRepository {
   fun saveFavoriteGuideIds(ids: Set<String>)
   fun toggleFavoriteGuideId(id: String): Set<String>
 }
-
-private val LEGACY_PREFILLED_DEFAULT_FAVORITE_IDS: Set<String> =
-  setOf("sign_TAURUS", "sign_SCORPIO", "planet_MOON", "planet_VENUS")
 
 class InMemoryStarsRepository(
   initialProfiles: List<BirthProfile> = DEFAULT_BIRTH_PROFILES,
@@ -1566,10 +1550,7 @@ class SharedPreferencesStarsRepository(
       val list = mutableListOf<BirthProfile>()
       for (i in 0 until arr.length()) {
         val obj = arr.optJSONObject(i) ?: continue
-        val profile = BirthProfile.fromJson(obj)
-        if (!isLegacyPrefilledDefaultProfile(profile)) {
-          list.add(profile)
-        }
+        list.add(BirthProfile.fromJson(obj))
       }
       list
     } catch (_: Exception) {
@@ -1608,12 +1589,7 @@ class SharedPreferencesStarsRepository(
   }
 
   override fun loadFavoriteGuideIds(): Set<String> {
-    val saved = prefs.getStringSet(PREF_KEY_STARS_FAVORITE_IDS, null)?.toSet() ?: return emptySet()
-    if (saved == LEGACY_PREFILLED_DEFAULT_FAVORITE_IDS) {
-      prefs.edit().remove(PREF_KEY_STARS_FAVORITE_IDS).apply()
-      return emptySet()
-    }
-    return saved
+    return prefs.getStringSet(PREF_KEY_STARS_FAVORITE_IDS, null)?.toSet() ?: emptySet()
   }
 
   override fun saveFavoriteGuideIds(ids: Set<String>) {
@@ -1684,14 +1660,6 @@ object StarsEngine {
   var activeSignState by mutableStateOf(getCurrentZodiacSign())
     private set
 
-  fun updateActiveSign(sign: ZodiacSign, context: Context? = null) {
-    val changed = activeSignState != sign
-    activeSignState = sign
-    if (changed && context != null) {
-      TodoListWidgets.refreshAllToolboxWidgets(context)
-    }
-  }
-
   /**
    * Resolves the current calendar [ZodiacSign] for today's date and updates [activeSignState].
    */
@@ -1707,10 +1675,6 @@ object StarsEngine {
       TodoListWidgets.refreshAllToolboxWidgets(context)
     }
     return currentSign
-  }
-
-  fun requestWidgetTab(tabName: String?) {
-    _pendingWidgetTabFlow.value = tabName
   }
 
   fun consumePendingWidgetTab(): String? {

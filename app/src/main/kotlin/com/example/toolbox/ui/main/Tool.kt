@@ -301,16 +301,6 @@ enum class Tool(
 
   val isLandscapeLocked: Boolean
     get() = screenOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-
-  companion object {
-    val ARCHIVES: Tool get() = ARCHIVE
-    val DOCUMENT_VIEWER: Tool get() = PDF_VIEWER
-    val IMAGE_VIEWER: Tool get() = IMAGE
-    val MUSIC_PLAYER: Tool get() = MUSIC
-    val RECIPE_BOOK: Tool get() = RECIPES
-    val OBD2: Tool get() = OBD2_SCANNER
-    val PERIODIC_TABLE: Tool get() = ELEMENTS
-  }
 }
 
 /**

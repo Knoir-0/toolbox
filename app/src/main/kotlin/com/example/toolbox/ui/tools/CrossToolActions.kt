@@ -383,12 +383,6 @@ class CrossToolFileHostState {
   var fileForArchive by mutableStateOf<File?>(null)
   var filesForArchiveCompression by mutableStateOf<List<File>?>(null)
   var fileForPdfViewer by mutableStateOf<File?>(null)
-
-  var fileForDocumentViewer: File?
-    get() = fileForPdfViewer
-    set(value) {
-      fileForPdfViewer = value
-    }
   var fileForMusicPlayer by mutableStateOf<File?>(null)
   var fileForGallery by mutableStateOf<File?>(null)
   var colorHexForColorPicker by mutableStateOf<String?>(null)
@@ -398,12 +392,6 @@ class CrossToolFileHostState {
   var fileToDelete by mutableStateOf<File?>(null)
   var fileForDetails by mutableStateOf<File?>(null)
   var fileForTextEdit by mutableStateOf<File?>(null)
-
-  var filesForCompression: List<File>?
-    get() = filesForArchiveCompression
-    set(value) {
-      filesForArchiveCompression = value
-    }
 
   var fileForColorPicker: File?
     get() = null

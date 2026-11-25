@@ -1731,8 +1731,7 @@ object MusicPlayerWidgets {
 
   /**
    * Updates all pinned instances of the unified responsive Music Player widget
-   * ([MusicAlbumArtWidgetProvider]) — plus any legacy [MusicMiniBarWidgetProvider] or
-   * [MusicMediumWidgetProvider] instances — on the user's home screen, automatically selecting the
+   * ([MusicAlbumArtWidgetProvider]) on the user's home screen, automatically selecting the
    * appropriate view ([MusicWidgetViewStyle.MINI_BAR], [MusicWidgetViewStyle.MEDIUM], or
    * [MusicWidgetViewStyle.ALBUM_ART]) for each widget instance's current size.
    */
@@ -1740,48 +1739,17 @@ object MusicPlayerWidgets {
     val appCtx = context?.applicationContext ?: context ?: return
     try {
       val manager = AppWidgetManager.getInstance(appCtx) ?: return
-      val miniComponent = ComponentName(appCtx, MusicMiniBarWidgetProvider::class.java)
-      val mediumComponent = ComponentName(appCtx, MusicMediumWidgetProvider::class.java)
       val albumComponent = ComponentName(appCtx, MusicAlbumArtWidgetProvider::class.java)
-      val miniIds = try {
-        manager.getAppWidgetIds(miniComponent) ?: IntArray(0)
-      } catch (_: Throwable) {
-        IntArray(0)
-      }
-      val mediumIds = try {
-        manager.getAppWidgetIds(mediumComponent) ?: IntArray(0)
-      } catch (_: Throwable) {
-        IntArray(0)
-      }
       val albumIds = try {
         manager.getAppWidgetIds(albumComponent) ?: IntArray(0)
       } catch (_: Throwable) {
         IntArray(0)
       }
-      if (miniIds.isEmpty() && mediumIds.isEmpty() && albumIds.isEmpty()) return
+      if (albumIds.isEmpty()) return
 
       val state = resolveWidgetState(appCtx)
-      if (miniIds.isNotEmpty()) {
-        updateResponsiveWidgets(appCtx, manager, miniIds, state)
-      }
-      if (mediumIds.isNotEmpty()) {
-        updateResponsiveWidgets(appCtx, manager, mediumIds, state)
-      }
-      if (albumIds.isNotEmpty()) {
-        updateResponsiveWidgets(appCtx, manager, albumIds, state)
-      }
+      updateResponsiveWidgets(appCtx, manager, albumIds, state)
     } catch (_: Throwable) {}
-  }
-
-  /**
-   * No-op because the Mini Player widget no longer displays a seek/progress bar.
-   */
-  @Suppress("UNUSED_PARAMETER")
-  fun updateMiniBarProgressOnly(
-    context: Context?,
-    progressPermille: Int,
-  ) {
-    // Seek bar display was removed from the mini widget.
   }
 
   /**
@@ -1809,104 +1777,6 @@ object MusicPlayerWidgets {
         )
         appWidgetManager.updateAppWidget(appWidgetId, views)
       } catch (_: Throwable) {}
-    }
-  }
-
-  /**
-   * Updates the specified [appWidgetIds] for [MusicMiniBarWidgetProvider].
-   */
-  fun updateMiniBarWidgets(
-    context: Context,
-    appWidgetManager: AppWidgetManager,
-    appWidgetIds: IntArray,
-    state: MusicPlayerWidgetState = resolveWidgetState(context),
-  ) {
-    updateResponsiveWidgets(context, appWidgetManager, appWidgetIds, state)
-  }
-
-  /**
-   * Updates the specified [appWidgetIds] for [MusicMediumWidgetProvider].
-   */
-  fun updateMediumWidgets(
-    context: Context,
-    appWidgetManager: AppWidgetManager,
-    appWidgetIds: IntArray,
-    state: MusicPlayerWidgetState = resolveWidgetState(context),
-  ) {
-    updateResponsiveWidgets(context, appWidgetManager, appWidgetIds, state)
-  }
-
-  /**
-   * Updates the specified [appWidgetIds] for [MusicAlbumArtWidgetProvider].
-   */
-  fun updateAlbumArtWidgets(
-    context: Context,
-    appWidgetManager: AppWidgetManager,
-    appWidgetIds: IntArray,
-    state: MusicPlayerWidgetState = resolveWidgetState(context),
-  ) {
-    updateResponsiveWidgets(context, appWidgetManager, appWidgetIds, state)
-  }
-}
-
-/**
- * Legacy Mini Bar widget provider retained as a thin delegate to [MusicPlayerWidgets.updateResponsiveWidgets].
- * The unified responsive Music Player widget registered in `AndroidManifest.xml` is [MusicAlbumArtWidgetProvider].
- */
-class MusicMiniBarWidgetProvider : AppWidgetProvider() {
-  override fun onUpdate(
-    context: Context,
-    appWidgetManager: AppWidgetManager,
-    appWidgetIds: IntArray,
-  ) {
-    MusicPlayerWidgets.updateResponsiveWidgets(context, appWidgetManager, appWidgetIds)
-  }
-
-  override fun onAppWidgetOptionsChanged(
-    context: Context,
-    appWidgetManager: AppWidgetManager,
-    appWidgetId: Int,
-    newOptions: Bundle,
-  ) {
-    MusicPlayerWidgets.updateResponsiveWidgets(context, appWidgetManager, intArrayOf(appWidgetId))
-  }
-
-  override fun onReceive(context: Context, intent: Intent) {
-    super.onReceive(context, intent)
-    val action = intent.action ?: return
-    if (action.startsWith("com.example.toolbox.music.ACTION_")) {
-      MusicPlayerWidgets.handleWidgetAction(context, action)
-    }
-  }
-}
-
-/**
- * Legacy Medium Player widget provider retained as a thin delegate to [MusicPlayerWidgets.updateResponsiveWidgets].
- * The unified responsive Music Player widget registered in `AndroidManifest.xml` is [MusicAlbumArtWidgetProvider].
- */
-class MusicMediumWidgetProvider : AppWidgetProvider() {
-  override fun onUpdate(
-    context: Context,
-    appWidgetManager: AppWidgetManager,
-    appWidgetIds: IntArray,
-  ) {
-    MusicPlayerWidgets.updateResponsiveWidgets(context, appWidgetManager, appWidgetIds)
-  }
-
-  override fun onAppWidgetOptionsChanged(
-    context: Context,
-    appWidgetManager: AppWidgetManager,
-    appWidgetId: Int,
-    newOptions: Bundle,
-  ) {
-    MusicPlayerWidgets.updateResponsiveWidgets(context, appWidgetManager, intArrayOf(appWidgetId))
-  }
-
-  override fun onReceive(context: Context, intent: Intent) {
-    super.onReceive(context, intent)
-    val action = intent.action ?: return
-    if (action.startsWith("com.example.toolbox.music.ACTION_")) {
-      MusicPlayerWidgets.handleWidgetAction(context, action)
     }
   }
 }

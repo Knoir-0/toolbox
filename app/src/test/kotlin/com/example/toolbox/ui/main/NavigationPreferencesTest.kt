@@ -214,7 +214,7 @@ class NavigationPreferencesTest {
       Tool.ARCHIVE,
       Tool.MUSIC,
       Tool.PDF_VIEWER,
-      Tool.RECIPE_BOOK,
+      Tool.RECIPES,
       Tool.OBD2_SCANNER,
       Tool.ELEMENTS,
       Tool.GOOD,
@@ -271,7 +271,7 @@ class NavigationPreferencesTest {
       Tool.ARCHIVE,
       Tool.MUSIC,
       Tool.PDF_VIEWER,
-      Tool.RECIPE_BOOK,
+      Tool.RECIPES,
       Tool.OBD2_SCANNER,
       Tool.ELEMENTS,
       Tool.GOOD,
@@ -414,22 +414,6 @@ class NavigationPreferencesTest {
     // Persisted empty set survives repository reload
     val reloadedRepo = DefaultNavigationPreferencesRepository(fakePrefs)
     assertTrue(reloadedRepo.getHiddenTools().isEmpty())
-
-    // Existing installation with legacy PREF_KEY_HIDDEN_TOOLS automatically hides newly added default-hidden tools (e.g. ARCHIVE)
-    val legacyPrefs = FakeSharedPreferences()
-    legacyPrefs.edit()
-      .putString(PREF_KEY_HIDDEN_TOOLS, "FILE_CONVERTER,IMAGE_EDITOR,VIDEO_EDITOR,AUDIO_EDITOR,DECIBEL_METER")
-      .apply()
-    val upgradedRepo = DefaultNavigationPreferencesRepository(legacyPrefs)
-    assertTrue(upgradedRepo.getHiddenTools().contains(Tool.ARCHIVE))
-    assertTrue(upgradedRepo.getHiddenTools().contains(Tool.PDF_VIEWER))
-    assertTrue(upgradedRepo.hiddenToolsFlow.value.contains(Tool.ARCHIVE))
-    assertTrue(upgradedRepo.hiddenToolsFlow.value.contains(Tool.PDF_VIEWER))
-
-    // User can subsequently unhide ARCHIVE and the choice persists across reloads
-    upgradedRepo.setHiddenTools(upgradedRepo.getHiddenTools() - Tool.ARCHIVE)
-    val reloadedAfterUnhide = DefaultNavigationPreferencesRepository(legacyPrefs)
-    assertTrue(!reloadedAfterUnhide.getHiddenTools().contains(Tool.ARCHIVE))
   }
 
   @Test
