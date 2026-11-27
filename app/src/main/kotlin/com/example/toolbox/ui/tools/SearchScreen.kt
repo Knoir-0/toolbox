@@ -418,24 +418,37 @@ fun SearchScreen(
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 
-    // Main Content Area
-    Box(
+    // Horizontally Paginated Main Content Area across Search Categories
+    ToolboxPillHorizontalPager(
+      items = SearchCategoryFilter.entries,
+      selectedItem = selectedCategoryFilter,
+      key = { _, filter -> filter.name },
+      onSelectItem = { filter ->
+        selectedCategoryFilter = filter
+      },
       modifier = Modifier
         .weight(1f)
-        .fillMaxWidth()
-        .swipeToSwitchPillView(
-          items = SearchCategoryFilter.entries,
-          selectedItem = selectedCategoryFilter,
-          onSelectItem = { filter ->
-            selectedCategoryFilter = filter
-          },
-        ),
-    ) {
+        .fillMaxWidth(),
+    ) { pageCategoryFilter ->
+      val isActivePage = pageCategoryFilter == selectedCategoryFilter
+      val pageResults = if (isActivePage) {
+        results
+      } else {
+        remember(searchQuery, pageCategoryFilter, selectedToolFilter, dataSources) {
+          SearchEngine.search(
+            query = searchQuery,
+            categoryFilter = pageCategoryFilter,
+            toolFilter = selectedToolFilter,
+            dataSources = dataSources,
+          )
+        }
+      }
+
       if (searchQuery.isBlank()) {
         SearchDiscoveryHomeView(
           hiddenTools = hiddenTools,
           usageCounts = usageCounts,
-          selectedCategoryFilter = selectedCategoryFilter,
+          selectedCategoryFilter = pageCategoryFilter,
           onRunQuery = { query ->
             isSearchActive = true
             searchQuery = query
@@ -444,10 +457,10 @@ fun SearchScreen(
             launchToolFromSearch(tool)
           },
         )
-      } else if (results.isEmpty()) {
+      } else if (pageResults.isEmpty()) {
         SearchEmptyResultsView(
           query = searchQuery,
-          hasActiveFilters = selectedCategoryFilter != SearchCategoryFilter.ALL || selectedToolFilter != null,
+          hasActiveFilters = pageCategoryFilter != SearchCategoryFilter.ALL || selectedToolFilter != null,
           onResetFilters = {
             selectedCategoryFilter = SearchCategoryFilter.ALL
             selectedToolFilterName = null
@@ -457,11 +470,11 @@ fun SearchScreen(
         LazyColumn(
           modifier = Modifier
             .fillMaxSize()
-            .testTag("search_results_list"),
+            .then(if (isActivePage) Modifier.testTag("search_results_list") else Modifier),
           contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          items(results, key = { it.id }) { item ->
+          items(pageResults, key = { it.id }) { item ->
             SearchResultCard(
               item = item,
               isHiddenTool = item.resultType == SearchResultType.TOOL && item.tool in hiddenTools,

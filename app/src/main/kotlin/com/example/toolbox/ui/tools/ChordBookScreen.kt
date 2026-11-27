@@ -546,16 +546,7 @@ fun ChordBookScreen(
         .fillMaxSize()
         .weight(1f),
     ) {
-      Column(
-        modifier = Modifier
-          .fillMaxSize()
-          .swipeToSwitchPillView(
-            items = ChordBookTab.entries,
-            selectedItem = activeTab,
-            enabled = !isSearchActive,
-            onSelectItem = { activeTab = it },
-          ),
-      ) {
+      Column(modifier = Modifier.fillMaxSize()) {
         // 2. Mode Switcher Pill Bar (styled in line with Files & Music pill selectors)
         ToolboxPillNavigationBar(
           rowTestTag = "chord_book_pill_bar",
@@ -575,8 +566,19 @@ fun ChordBookScreen(
           }
         }
 
-        // 3. Active Tab Content
-        when (activeTab) {
+        // 3. Horizontally Paginated Tab Content
+        ToolboxPillHorizontalPager(
+          items = ChordBookTab.entries,
+          selectedItem = activeTab,
+          enabled = !isSearchActive,
+          key = { _, tab -> tab.name },
+          onSelectItem = { activeTab = it },
+          modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth(),
+        ) { pageTab ->
+        Column(modifier = Modifier.fillMaxSize()) {
+        when (pageTab) {
       ChordBookTab.CHORDS -> {
         ChordsExplorerTabContent(
           activeTuning = activeTuning,
@@ -848,6 +850,8 @@ fun ChordBookScreen(
           modifier = Modifier.weight(1f),
         )
       }
+        }
+        }
         }
       }
 
@@ -4036,35 +4040,57 @@ private fun ChordTuningCatalogSearchOverlay(
         else -> 0
       }
 
+      ToolboxPillHorizontalPager(
+        items = tuningSearchPillIndices,
+        selectedItem = activeTuningSearchPillIndex,
+        key = { _, idx -> "chord_tuning_cat_$idx" },
+        onSelectItem = { idx ->
+          when (idx) {
+            0 -> {
+              if (favoritesOnly) onToggleFavoritesOnly()
+              onSelectCategory(null)
+              onSelectInstrument(null)
+            }
+            1 -> {
+              if (!favoritesOnly) onToggleFavoritesOnly()
+              onSelectCategory(null)
+            }
+            else -> {
+              val cat = GuitarTuningCategory.entries.getOrNull(idx - 2)
+              if (cat != null) {
+                if (favoritesOnly) onToggleFavoritesOnly()
+                onSelectCategory(cat)
+              }
+            }
+          }
+        },
+        modifier = Modifier
+          .fillMaxSize()
+          .weight(1f),
+      ) { pageIdx ->
+        val isActivePage = pageIdx == activeTuningSearchPillIndex
+        val pageFavOnly = pageIdx == 1
+        val pageCat = if (pageIdx >= 2) GuitarTuningCategory.entries.getOrNull(pageIdx - 2) else null
+        val pageTunings = if (isActivePage) {
+          matchingTunings
+        } else {
+          remember(allTunings, query, pageCat, selectedInstrument, pageFavOnly, favoriteTuningIds, enharmonicPref) {
+            ChordBookEngine.searchTunings(
+              catalog = allTunings,
+              query = query,
+              instrument = selectedInstrument,
+              category = pageCat,
+              favoritesOnly = pageFavOnly,
+              favoriteIds = favoriteTuningIds,
+              preference = enharmonicPref,
+            )
+          }
+        }
+
       LazyColumn(
         modifier = Modifier
           .fillMaxSize()
-          .weight(1f)
-          .swipeToSwitchPillView(
-            items = tuningSearchPillIndices,
-            selectedItem = activeTuningSearchPillIndex,
-            onSelectItem = { idx ->
-              when (idx) {
-                0 -> {
-                  if (favoritesOnly) onToggleFavoritesOnly()
-                  onSelectCategory(null)
-                  onSelectInstrument(null)
-                }
-                1 -> {
-                  if (!favoritesOnly) onToggleFavoritesOnly()
-                  onSelectCategory(null)
-                }
-                else -> {
-                  val cat = GuitarTuningCategory.entries.getOrNull(idx - 2)
-                  if (cat != null) {
-                    if (favoritesOnly) onToggleFavoritesOnly()
-                    onSelectCategory(cat)
-                  }
-                }
-              }
-            },
-          )
-          .testTag("catalog_results_section"),
+          .then(if (isActivePage) Modifier.testTag("catalog_results_section") else Modifier),
         contentPadding = PaddingValues(
           start = 16.dp,
           top = 12.dp,
@@ -4255,11 +4281,11 @@ private fun ChordTuningCatalogSearchOverlay(
             Column {
               Text(
                 text = when {
-                  query.isNotBlank() -> "Search Results (${matchingTunings.size})"
-                  favoritesOnly -> "Favorite Tunings (${matchingTunings.size})"
-                  selectedCategory != null -> "${selectedCategory.displayName} (${matchingTunings.size})"
-                  selectedInstrument != null -> "${selectedInstrument.displayName} (${matchingTunings.size})"
-                  else -> "Tuning Catalog (${matchingTunings.size})"
+                  query.isNotBlank() -> "Search Results (${pageTunings.size})"
+                  pageFavOnly -> "Favorite Tunings (${pageTunings.size})"
+                  pageCat != null -> "${pageCat.displayName} (${pageTunings.size})"
+                  selectedInstrument != null -> "${selectedInstrument.displayName} (${pageTunings.size})"
+                  else -> "Tuning Catalog (${pageTunings.size})"
                 },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
@@ -4274,7 +4300,7 @@ private fun ChordTuningCatalogSearchOverlay(
           }
         }
 
-        if (matchingTunings.isEmpty()) {
+        if (pageTunings.isEmpty()) {
           item(key = "catalog_empty") {
             Card(
               shape = RoundedCornerShape(14.dp),
@@ -4284,7 +4310,7 @@ private fun ChordTuningCatalogSearchOverlay(
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
               modifier = Modifier
                 .fillMaxWidth()
-                .testTag("catalog_empty_card"),
+                .then(if (isActivePage) Modifier.testTag("catalog_empty_card") else Modifier),
             ) {
               Column(
                 modifier = Modifier
@@ -4314,7 +4340,7 @@ private fun ChordTuningCatalogSearchOverlay(
           }
         } else {
           items(
-            items = matchingTunings,
+            items = pageTunings,
             key = { "catalog_${it.id}" },
           ) { tuning ->
             val isFavorite = ChordBookEngine.isTuningFavorite(tuning, favoriteTuningIds)
@@ -4331,12 +4357,13 @@ private fun ChordTuningCatalogSearchOverlay(
               } else {
                 null
               },
-              cardTestTag = "catalog_tuning_card_$tagKey",
-              optionTestTag = "tuning_option_${tuning.id}",
-              favoriteButtonTestTag = "catalog_favorite_button_$tagKey",
+              cardTestTag = if (isActivePage) "catalog_tuning_card_$tagKey" else "preview_tuning_card_$tagKey",
+              optionTestTag = if (isActivePage) "tuning_option_${tuning.id}" else "preview_tuning_option_${tuning.id}",
+              favoriteButtonTestTag = if (isActivePage) "catalog_favorite_button_$tagKey" else "preview_favorite_button_$tagKey",
             )
           }
         }
+      }
       }
     }
   }

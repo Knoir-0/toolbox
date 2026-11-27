@@ -31,6 +31,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
@@ -61,10 +63,12 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,10 +86,15 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -98,6 +107,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -933,8 +943,10 @@ fun ToolboxPillNavigationItem(
  *
  * - Swiping left (finger moving right-to-left) advances to the next pill view ([onSwipeToNext]).
  * - Swiping right (finger moving left-to-right) returns to the previous pill view ([onSwipeToPrevious]).
- * - Operates on [PointerEventPass.Main] so child horizontal scrollables, sliders, and drag handles consume
- *   their own gestures first, while vertical scrolling and multi-touch pinch-to-zoom remain unaffected.
+ * - Bubbles gestures upwards from all child elements that do not handle horizontal swipes (including clickable
+ *   cards, list/grid items, buttons, text, and non-scrolling or boundary-resting horizontal scroll rows via
+ *   [NestedScrollConnection]), while yielding to child sliders, swipe-to-dismiss rows, active horizontal
+ *   scrollables, vertical scrolling, and two-finger pinch-to-zoom.
  */
 @Composable
 fun Modifier.swipeToSwitchPillView(
@@ -950,70 +962,161 @@ fun Modifier.swipeToSwitchPillView(
   val currentOnSwipeToNext by rememberUpdatedState(onSwipeToNext)
   val density = LocalDensity.current
 
-  return this.pointerInput(enabled) {
-    if (!enabled) return@pointerInput
-    val minLockSlopPx = with(density) { 16.dp.toPx() }
-    val commitDistancePx = with(density) { 52.dp.toPx() }
+  val minLockSlopPx = with(density) { 8.dp.toPx() }
+  val commitDistancePx = with(density) { 48.dp.toPx() }
+  val minFlingDistancePx = with(density) { 24.dp.toPx() }
+  val flingVelocityPx = with(density) { 320.dp.toPx() }
 
-    awaitEachGesture {
-      val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
-      if (down.isConsumed) return@awaitEachGesture
+  val nestedSwipeState = remember {
+    object {
+      var childConsumedAnyScroll = false
+      var unconsumedDx = 0f
+      var unconsumedDy = 0f
 
-      val pointerId = down.id
-      val touchSlop = maxOf(viewConfiguration.touchSlop, with(density) { 10.dp.toPx() })
-      val lockSlop = maxOf(touchSlop * 1.15f, minLockSlopPx)
-      var totalDx = 0f
-      var totalDy = 0f
-      var lockedHorizontal = false
+      fun reset() {
+        childConsumedAnyScroll = false
+        unconsumedDx = 0f
+        unconsumedDy = 0f
+      }
+    }
+  }
 
-      while (true) {
-        val event = awaitPointerEvent(PointerEventPass.Main)
-        val pressedCount = event.changes.count { it.pressed }
-        if (pressedCount > 1) {
-          return@awaitEachGesture
+  val nestedScrollConnection = remember(enabled, commitDistancePx, minFlingDistancePx, flingVelocityPx) {
+    object : NestedScrollConnection {
+      override fun onPostScroll(
+        consumed: Offset,
+        available: Offset,
+        source: NestedScrollSource,
+      ): Offset {
+        if (!enabled || source != NestedScrollSource.UserInput) return Offset.Zero
+        if (abs(consumed.x) > 0.5f || abs(consumed.y) > 0.5f) {
+          nestedSwipeState.childConsumedAnyScroll = true
+          return Offset.Zero
         }
-
-        val change = event.changes.firstOrNull { it.id == pointerId } ?: return@awaitEachGesture
-        val isUp = change.changedToUpIgnoreConsumed()
-
-        if (!isUp && change.isConsumed) {
-          return@awaitEachGesture
-        }
-
-        val delta = change.positionChange()
-        totalDx += delta.x
-        totalDy += delta.y
-
-        if (!lockedHorizontal) {
-          if (abs(totalDy) > touchSlop && abs(totalDy) >= abs(totalDx) * 0.85f) {
-            return@awaitEachGesture
-          }
-          if (abs(totalDx) > lockSlop && abs(totalDx) > abs(totalDy) * 1.35f) {
-            val swipingNext = totalDx < 0f
-            val swipingPrev = totalDx > 0f
-            if ((swipingNext && !currentCanSwipeToNext) || (swipingPrev && !currentCanSwipeToPrevious)) {
-              return@awaitEachGesture
-            }
-            lockedHorizontal = true
-            change.consume()
-          }
-        } else {
-          change.consume()
-        }
-
-        if (isUp) {
-          if (lockedHorizontal) {
-            if (totalDx <= -commitDistancePx && currentCanSwipeToNext) {
-              currentOnSwipeToNext()
-            } else if (totalDx >= commitDistancePx && currentCanSwipeToPrevious) {
-              currentOnSwipeToPrevious()
+        if (!nestedSwipeState.childConsumedAnyScroll) {
+          nestedSwipeState.unconsumedDx += available.x
+          nestedSwipeState.unconsumedDy += available.y
+          if (abs(nestedSwipeState.unconsumedDx) > abs(nestedSwipeState.unconsumedDy) * 1.25f) {
+            val swipingNext = nestedSwipeState.unconsumedDx < 0f
+            val swipingPrev = nestedSwipeState.unconsumedDx > 0f
+            if ((swipingNext && currentCanSwipeToNext) || (swipingPrev && currentCanSwipeToPrevious)) {
+              return Offset(x = available.x, y = 0f)
             }
           }
-          return@awaitEachGesture
+        }
+        return Offset.Zero
+      }
+
+      override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+        val dx = nestedSwipeState.unconsumedDx
+        val dy = nestedSwipeState.unconsumedDy
+        val childScrolled = nestedSwipeState.childConsumedAnyScroll
+        nestedSwipeState.reset()
+
+        if (!enabled || childScrolled || abs(dx) <= abs(dy) * 1.25f) {
+          return Velocity.Zero
+        }
+
+        val triggeredNext = currentCanSwipeToNext &&
+          (dx <= -commitDistancePx || (dx <= -minFlingDistancePx && available.x <= -flingVelocityPx))
+        val triggeredPrev = currentCanSwipeToPrevious &&
+          (dx >= commitDistancePx || (dx >= minFlingDistancePx && available.x >= flingVelocityPx))
+
+        return when {
+          triggeredNext -> {
+            currentOnSwipeToNext()
+            Velocity(x = available.x, y = 0f)
+          }
+          triggeredPrev -> {
+            currentOnSwipeToPrevious()
+            Velocity(x = available.x, y = 0f)
+          }
+          else -> Velocity.Zero
         }
       }
     }
   }
+
+  return this
+    .then(if (enabled) Modifier.nestedScroll(nestedScrollConnection) else Modifier)
+    .pointerInput(enabled) {
+      if (!enabled) return@pointerInput
+
+      awaitEachGesture {
+        // Use requireUnconsumed = false and do NOT abort if down.isConsumed is true:
+        // clickable / combinedClickable cards, list rows, and buttons always consume DOWN on press,
+        // while leaving horizontal MOVE events unconsumed so they bubble up here on PointerEventPass.Main.
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
+        nestedSwipeState.reset()
+
+        val pointerId = down.id
+        val touchSlop = maxOf(viewConfiguration.touchSlop, with(density) { 10.dp.toPx() })
+        val lockSlop = maxOf(touchSlop * 1.1f, minLockSlopPx)
+        val velocityTracker = VelocityTracker()
+        velocityTracker.addPointerInputChange(down)
+
+        var totalDx = 0f
+        var totalDy = 0f
+        var lockedHorizontal = false
+
+        while (true) {
+          val event = awaitPointerEvent(PointerEventPass.Main)
+          val pressedCount = event.changes.count { it.pressed }
+          if (pressedCount > 1) {
+            return@awaitEachGesture
+          }
+
+          val change = event.changes.firstOrNull { it.id == pointerId } ?: return@awaitEachGesture
+          velocityTracker.addPointerInputChange(change)
+          val isUp = change.changedToUpIgnoreConsumed()
+
+          if (!lockedHorizontal && !isUp && change.isConsumed) {
+            // A child component with its own drag/scroll handler (e.g. Slider, SwipeToDismissBox,
+            // horizontalScroll, or vertical LazyColumn scroll) consumed the movement first.
+            return@awaitEachGesture
+          }
+
+          val delta = change.positionChange()
+          totalDx += delta.x
+          totalDy += delta.y
+
+          if (!lockedHorizontal) {
+            if (abs(totalDy) > touchSlop && abs(totalDy) >= abs(totalDx) * 0.85f) {
+              return@awaitEachGesture
+            }
+            if (abs(totalDx) > lockSlop && abs(totalDx) > abs(totalDy) * 1.25f) {
+              val swipingNext = totalDx < 0f
+              val swipingPrev = totalDx > 0f
+              if ((swipingNext && !currentCanSwipeToNext) || (swipingPrev && !currentCanSwipeToPrevious)) {
+                return@awaitEachGesture
+              }
+              lockedHorizontal = true
+              change.consume()
+            }
+          } else {
+            change.consume()
+          }
+
+          if (isUp) {
+            if (lockedHorizontal) {
+              val velocityX = velocityTracker.calculateVelocity().x
+              if (
+                currentCanSwipeToNext &&
+                (totalDx <= -commitDistancePx || (totalDx <= -minFlingDistancePx && velocityX <= -flingVelocityPx))
+              ) {
+                currentOnSwipeToNext()
+              } else if (
+                currentCanSwipeToPrevious &&
+                (totalDx >= commitDistancePx || (totalDx >= minFlingDistancePx && velocityX >= flingVelocityPx))
+              ) {
+                currentOnSwipeToPrevious()
+              }
+            }
+            return@awaitEachGesture
+          }
+        }
+      }
+    }
 }
 
 /**
@@ -1060,4 +1163,114 @@ fun <T> Modifier.swipeToSwitchPillView(
       }
     },
   )
+}
+
+/**
+ * Shared horizontally paginated container ([HorizontalPager]) synchronized with a [ToolboxPillNavigationBar]
+ * (`Section 5.4` of `DESIGN_LANGUAGE.md`).
+ *
+ * Renders each pill's view on its own horizontal page (`pageContent(item)`) so swiping horizontally anywhere
+ * across the tool's content (clickable cards, lists, grids, buttons, or background) smoothly slides the views
+ * 1:1 with the user's finger and snaps between pages, while yielding to child sliders, swipe-to-dismiss rows,
+ * active child horizontal scrollables (automatically bubbling into page sliding at scroll edges), vertical
+ * scrolling, and two-finger pinch-to-zoom.
+ */
+@Composable
+fun <T> ToolboxPillHorizontalPager(
+  items: List<T>,
+  selectedItem: T,
+  onSelectItem: (T) -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  beyondViewportPageCount: Int = 0,
+  performHapticOnSwipe: Boolean = true,
+  key: ((index: Int, item: T) -> Any)? = null,
+  pageContent: @Composable (item: T) -> Unit,
+) {
+  val selectedIndex = items.indexOf(selectedItem)
+  if (items.size <= 1 || selectedIndex < 0) {
+    Box(modifier = modifier) {
+      pageContent(selectedItem)
+    }
+    return
+  }
+
+  val pagerState = rememberPagerState(
+    initialPage = selectedIndex.coerceIn(0, items.lastIndex),
+  ) {
+    items.size
+  }
+
+  val haptic = LocalHapticFeedback.current
+  val currentItems by rememberUpdatedState(items)
+  val currentSelectedItem by rememberUpdatedState(selectedItem)
+  val currentOnSelectItem by rememberUpdatedState(onSelectItem)
+  val currentPerformHaptic by rememberUpdatedState(performHapticOnSwipe)
+
+  var programmaticTargetPage by remember { mutableIntStateOf(-1) }
+  var lastSyncedItem by remember { mutableStateOf<Any?>(selectedItem) }
+
+  // Sync external pill tap / programmatic state changes -> HorizontalPager
+  LaunchedEffect(selectedIndex, items.size, selectedItem) {
+    val target = selectedIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+    val itemChanged = lastSyncedItem != selectedItem
+    lastSyncedItem = selectedItem
+    if (pagerState.currentPage != target || pagerState.settledPage != target) {
+      programmaticTargetPage = target
+      try {
+        if (itemChanged) {
+          pagerState.animateScrollToPage(target)
+        } else {
+          // Items reordered while keeping the same active item
+          pagerState.scrollToPage(target)
+        }
+      } finally {
+        if (programmaticTargetPage == target) {
+          programmaticTargetPage = -1
+        }
+      }
+    }
+  }
+
+  // Sync user horizontal swipe -> selectedItem state & pill bar
+  LaunchedEffect(pagerState) {
+    snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }
+      .collect { (settled, scrolling) ->
+        if (programmaticTargetPage != -1) return@collect
+        if (currentSelectedItem != lastSyncedItem) return@collect
+        if (!scrolling) {
+          val list = currentItems
+          if (settled in list.indices) {
+            val nextItem = list[settled]
+            if (nextItem != currentSelectedItem) {
+              lastSyncedItem = nextItem
+              if (currentPerformHaptic) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
+              currentOnSelectItem(nextItem)
+            }
+          }
+        }
+      }
+  }
+
+  HorizontalPager(
+    state = pagerState,
+    userScrollEnabled = enabled,
+    beyondViewportPageCount = beyondViewportPageCount,
+    key = if (key != null) {
+      { idx ->
+        if (idx in items.indices) key(idx, items[idx]) else idx
+      }
+    } else {
+      null
+    },
+    modifier = modifier,
+  ) { pageIndex ->
+    if (pageIndex in items.indices) {
+      Box(modifier = Modifier.fillMaxSize()) {
+        pageContent(items[pageIndex])
+      }
+    }
+  }
 }

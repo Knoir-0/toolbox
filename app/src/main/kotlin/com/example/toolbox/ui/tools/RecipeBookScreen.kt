@@ -567,98 +567,111 @@ fun RecipeBookScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
-                    .swipeToSwitchPillView(
-                        items = recipeCategoryPillOptions,
-                        selectedItem = selectedCategory,
-                        enabled = !isSelectionMode,
-                        onSelectItem = { category ->
-                            selectedCategoryName = category?.name
-                        }
-                    )
             ) {
-                // Main Scrollable Tool Content (mirrors PlantScheduleScreen LazyColumn layout)
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("saved_recipes_list"),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        top = 14.dp,
-                        end = 16.dp,
-                        bottom = 88.dp // Extra bottom padding for FAB
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    // 1. Time-of-Day Meal Suggestions Card (at the top, inspired by MonthActivitySummaryCard in Plants)
-                    item(key = "meal_time_suggestions_card") {
-                        MealTimeSuggestionsCard(
-                            suggestionsResult = mealSuggestions,
-                            favoriteRecipeIds = favoriteRecipeIds,
-                            onSelectMealTime = { nextMealTime ->
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                selectedMealTimeName = nextMealTime.name
-                            },
-                            onInspectRecipe = { recipe ->
-                                inspectingRecipe = recipe
-                            },
-                            onToggleFavoriteRecipe = { recipe ->
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                toggleRecipeFavoriteInBook(recipe)
-                            }
-                        )
+                ToolboxPillHorizontalPager(
+                    items = recipeCategoryPillOptions,
+                    selectedItem = selectedCategory,
+                    enabled = !isSelectionMode && !isSearchActive,
+                    key = { _, cat -> cat?.name ?: "__ALL_RECIPES__" },
+                    onSelectItem = { category ->
+                        selectedCategoryName = category?.name
+                    },
+                    modifier = Modifier.fillMaxSize()
+                ) { pageCategory ->
+                    val isActivePage = pageCategory == selectedCategory
+                    val pageFilteredFavorites = if (isActivePage) {
+                        filteredFavoriteRecipes
+                    } else {
+                        remember(savedRecipes, pageCategory) {
+                            val favs = savedRecipes.filter { it.isFavorite }
+                            if (pageCategory == null) favs else favs.filter { it.category == pageCategory }
+                        }
                     }
 
-                    // 2. Favorite Recipes Main List Card (inspired by YearViewScheduleCard in Plants)
-                    item(key = "favorite_recipes_main_card") {
-                        FavoriteRecipesScheduleCard(
-                            favoriteRecipes = filteredFavoriteRecipes,
-                            totalFavoriteCount = favoriteCount,
-                            selectedCategory = selectedCategory,
-                            isSelectionMode = isSelectionMode,
-                            selectedIds = selectedIds,
-                            onClickRecipe = { recipe ->
-                                if (isSelectionMode) {
+                    // Main Scrollable Tool Content (mirrors PlantScheduleScreen LazyColumn layout)
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(if (isActivePage) Modifier.testTag("saved_recipes_list") else Modifier),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            top = 14.dp,
+                            end = 16.dp,
+                            bottom = 88.dp // Extra bottom padding for FAB
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        // 1. Time-of-Day Meal Suggestions Card (at the top, inspired by MonthActivitySummaryCard in Plants)
+                        item(key = "meal_time_suggestions_card") {
+                            MealTimeSuggestionsCard(
+                                suggestionsResult = mealSuggestions,
+                                favoriteRecipeIds = favoriteRecipeIds,
+                                onSelectMealTime = { nextMealTime ->
                                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    selectedIds = if (recipe.id in selectedIds) {
-                                        selectedIds - recipe.id
-                                    } else {
-                                        selectedIds + recipe.id
-                                    }
-                                    if (selectedIds.isEmpty()) {
-                                        isSelectionMode = false
-                                    }
-                                } else {
+                                    selectedMealTimeName = nextMealTime.name
+                                },
+                                onInspectRecipe = { recipe ->
                                     inspectingRecipe = recipe
+                                },
+                                onToggleFavoriteRecipe = { recipe ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    toggleRecipeFavoriteInBook(recipe)
                                 }
-                            },
-                            onLongClickRecipe = { recipe ->
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                if (!isSelectionMode) {
-                                    isSelectionMode = true
-                                    selectedIds = setOf(recipe.id)
-                                } else {
-                                    selectedIds = if (recipe.id in selectedIds) {
-                                        selectedIds - recipe.id
+                            )
+                        }
+
+                        // 2. Favorite Recipes Main List Card (inspired by YearViewScheduleCard in Plants)
+                        item(key = "favorite_recipes_main_card") {
+                            FavoriteRecipesScheduleCard(
+                                favoriteRecipes = pageFilteredFavorites,
+                                totalFavoriteCount = favoriteCount,
+                                selectedCategory = pageCategory,
+                                isSelectionMode = isSelectionMode,
+                                selectedIds = selectedIds,
+                                onClickRecipe = { recipe ->
+                                    if (isSelectionMode) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        selectedIds = if (recipe.id in selectedIds) {
+                                            selectedIds - recipe.id
+                                        } else {
+                                            selectedIds + recipe.id
+                                        }
+                                        if (selectedIds.isEmpty()) {
+                                            isSelectionMode = false
+                                        }
                                     } else {
-                                        selectedIds + recipe.id
+                                        inspectingRecipe = recipe
                                     }
+                                },
+                                onLongClickRecipe = { recipe ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (!isSelectionMode) {
+                                        isSelectionMode = true
+                                        selectedIds = setOf(recipe.id)
+                                    } else {
+                                        selectedIds = if (recipe.id in selectedIds) {
+                                            selectedIds - recipe.id
+                                        } else {
+                                            selectedIds + recipe.id
+                                        }
+                                    }
+                                },
+                                onToggleFavorite = { recipe ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    toggleRecipeFavoriteInBook(recipe)
+                                },
+                                onEditRecipe = { recipe ->
+                                    editingRecipe = recipe
+                                },
+                                onRemoveRecipe = { recipe ->
+                                    pendingDeleteRecipes = listOf(recipe)
+                                },
+                                onBrowseCatalog = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    isSearchActive = true
                                 }
-                            },
-                            onToggleFavorite = { recipe ->
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                toggleRecipeFavoriteInBook(recipe)
-                            },
-                            onEditRecipe = { recipe ->
-                                editingRecipe = recipe
-                            },
-                            onRemoveRecipe = { recipe ->
-                                pendingDeleteRecipes = listOf(recipe)
-                            },
-                            onBrowseCatalog = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                isSearchActive = true
-                            }
-                        )
+                            )
+                        }
                     }
                 }
 
@@ -669,24 +682,45 @@ fun RecipeBookScreen(
                     exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(shrinkTowards = Alignment.Top),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    RecipeCatalogSearchOverlay(
-                        query = searchQuery,
-                        selectedCategory = selectedCategory,
-                        matchingRecipes = matchingCatalogRecipes,
-                        favoriteRecipeIds = favoriteRecipeIds,
-                        onToggleRecipe = { recipe ->
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            toggleRecipeFavoriteInBook(recipe)
+                    ToolboxPillHorizontalPager(
+                        items = recipeCategoryPillOptions,
+                        selectedItem = selectedCategory,
+                        key = { _, cat -> "search_${cat?.name ?: "ALL"}" },
+                        onSelectItem = { category ->
+                            selectedCategoryName = category?.name
                         },
-                        onInspectRecipe = { recipe ->
-                            inspectingRecipe = recipe
-                        },
-                        onCreateCustomWithName = { prefillName ->
-                            prefillRecipe = null
-                            initialCustomName = prefillName
-                            isCreatingCustom = true
+                        modifier = Modifier.fillMaxSize()
+                    ) { pageSearchCat ->
+                        val pageMatchingRecipes = if (pageSearchCat == selectedCategory) {
+                            matchingCatalogRecipes
+                        } else {
+                            remember(allCatalog, searchQuery, pageSearchCat) {
+                                RecipeBookEngine.searchRecipes(
+                                    catalog = allCatalog,
+                                    query = searchQuery,
+                                    category = pageSearchCat
+                                )
+                            }
                         }
-                    )
+                        RecipeCatalogSearchOverlay(
+                            query = searchQuery,
+                            selectedCategory = pageSearchCat,
+                            matchingRecipes = pageMatchingRecipes,
+                            favoriteRecipeIds = favoriteRecipeIds,
+                            onToggleRecipe = { recipe ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                toggleRecipeFavoriteInBook(recipe)
+                            },
+                            onInspectRecipe = { recipe ->
+                                inspectingRecipe = recipe
+                            },
+                            onCreateCustomWithName = { prefillName ->
+                                prefillRecipe = null
+                                initialCustomName = prefillName
+                                isCreatingCustom = true
+                            }
+                        )
+                    }
                 }
             }
         }

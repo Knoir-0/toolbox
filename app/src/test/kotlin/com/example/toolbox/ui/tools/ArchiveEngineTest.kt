@@ -213,4 +213,157 @@ class ArchiveEngineTest {
     assertFalse(ArchiveEngine.isSafeExtractTarget(destDir, "../outside.txt"))
     assertFalse(ArchiveEngine.isSafeExtractTarget(destDir, "Documents/../../evil.sh"))
   }
+
+  @Test
+  fun aes256EncryptedZip_createVerifyReadAndExtract_roundTripsAndRejectsWrongPassword() {
+    val root = tempFolder.root
+    val secretDir = File(root, "Vault").apply { mkdirs() }
+    File(secretDir, "credentials.txt").writeText("api_key=super-secret-token-2026\n".repeat(12))
+    File(secretDir, "empty.txt").writeBytes(ByteArray(0))
+    val rawBinary = ByteArray(1024) { idx -> ((idx * 37 + 13) and 0xFF).toByte() }
+    val binFile = File(root, "payload.bin").apply { writeBytes(rawBinary) }
+
+    val encryptedZip = File(root, "vault_aes256.zip")
+    val createRes = ArchiveEngine.createArchive(
+      sourceFiles = listOf(secretDir, binFile),
+      outputFile = encryptedZip,
+      format = ArchiveFormat.ZIP,
+      compressionLevel = ArchiveCompressionLevel.BALANCED,
+      password = "Correct-Horse-Battery-Staple!🔒",
+      encryptionMethod = ArchiveEncryptionMethod.AES_256,
+    )
+    assertTrue(createRes.success)
+    assertTrue(encryptedZip.exists())
+
+    // Metadata & hierarchy are readable without a password, flagging encryption accurately
+    val info = ArchiveEngine.readArchive(encryptedZip).getOrThrow()
+    assertTrue(info.isEncrypted)
+    assertEquals(ArchiveEncryptionMethod.AES_256, info.encryptionMethod)
+    assertEquals(3, info.totalFileCount)
+    assertTrue(info.allEntries.filter { !it.isDirectory }.all { it.isEncrypted })
+
+    // Password verification
+    assertFalse(ArchiveEngine.verifyArchivePassword(encryptedZip, "").getOrThrow())
+    assertFalse(ArchiveEngine.verifyArchivePassword(encryptedZip, "wrong-password").getOrThrow())
+    assertTrue(ArchiveEngine.verifyArchivePassword(encryptedZip, "Correct-Horse-Battery-Staple!🔒").getOrThrow())
+
+    // Missing or wrong password blocks reading and extracting
+    assertNull(ArchiveEngine.readEntryText(encryptedZip, "Vault/credentials.txt"))
+    assertNull(ArchiveEngine.readEntryText(encryptedZip, "Vault/credentials.txt", password = "bad"))
+
+    val missingPwExtract = ArchiveEngine.extractAll(encryptedZip, File(root, "FailMissing"))
+    assertFalse(missingPwExtract.success)
+    assertTrue(missingPwExtract.passwordRequired)
+
+    val wrongPwExtract = ArchiveEngine.extractAll(encryptedZip, File(root, "FailWrong"), password = "wrong")
+    assertFalse(wrongPwExtract.success)
+    assertTrue(wrongPwExtract.invalidPassword)
+
+    // Correct password reads entries and extracts byte-for-byte
+    assertEquals(
+      "api_key=super-secret-token-2026\n".repeat(12),
+      ArchiveEngine.readEntryText(encryptedZip, "Vault/credentials.txt", password = "Correct-Horse-Battery-Staple!🔒"),
+    )
+    val okDir = File(root, "UnlockedOut")
+    val okExtract = ArchiveEngine.extractAll(
+      archiveFile = encryptedZip,
+      destinationDir = okDir,
+      password = "Correct-Horse-Battery-Staple!🔒",
+    )
+    assertTrue(okExtract.success)
+    assertEquals(3, okExtract.extractedFilesCount)
+    assertEquals("", File(okDir, "Vault/empty.txt").readText())
+    assertTrue(rawBinary.contentEquals(File(okDir, "payload.bin").readBytes()))
+  }
+
+  @Test
+  fun zipCryptoEncryptedZip_storeAndDeflate_roundTripsAndRejectsWrongPassword() {
+    val root = tempFolder.root
+    val note = File(root, "legacy_note.txt").apply {
+      writeText("Legacy ZipCrypto compatibility test payload ".repeat(20))
+    }
+
+    for (level in listOf(ArchiveCompressionLevel.STORE, ArchiveCompressionLevel.MAXIMUM)) {
+      val zipFile = File(root, "legacy_${level.name}.zip")
+      val res = ArchiveEngine.createArchive(
+        sourceFiles = listOf(note),
+        outputFile = zipFile,
+        format = ArchiveFormat.ZIP,
+        compressionLevel = level,
+        password = "p@ssw0rd123",
+        encryptionMethod = ArchiveEncryptionMethod.ZIP_CRYPTO,
+      )
+      assertTrue(res.success)
+
+      val info = ArchiveEngine.readArchive(zipFile).getOrThrow()
+      assertTrue(info.isEncrypted)
+      assertEquals(ArchiveEncryptionMethod.ZIP_CRYPTO, info.encryptionMethod)
+
+      assertFalse(ArchiveEngine.verifyArchivePassword(zipFile, "wrong").getOrThrow())
+      assertTrue(ArchiveEngine.verifyArchivePassword(zipFile, "p@ssw0rd123").getOrThrow())
+      assertEquals(
+        note.readText(),
+        ArchiveEngine.readEntryText(zipFile, "legacy_note.txt", password = "p@ssw0rd123"),
+      )
+    }
+  }
+
+  @Test
+  fun encryptedZip_inPlaceModificationsAndPasswordUpdates_preserveEncryptionAndIntegrity() {
+    val root = tempFolder.root
+    val f1 = File(root, "one.txt").apply { writeText("Initial secret 1") }
+    val zipFile = File(root, "mutable_encrypted.zip")
+
+    // Start unencrypted, then encrypt in-place with AES-256
+    assertTrue(ArchiveEngine.createArchive(listOf(f1), zipFile, ArchiveFormat.ZIP).success)
+    assertFalse(ArchiveEngine.readArchive(zipFile).getOrThrow().isEncrypted)
+
+    val encRes = ArchiveEngine.updateArchivePassword(
+      archiveFile = zipFile,
+      currentPassword = null,
+      newPassword = "pw1",
+      encryptionMethod = ArchiveEncryptionMethod.AES_256,
+    )
+    assertTrue(encRes.success)
+    assertEquals(ArchiveEncryptionMethod.AES_256, ArchiveEngine.readArchive(zipFile).getOrThrow().encryptionMethod)
+
+    // Without password, adding/modifying is rejected
+    val f2 = File(root, "two.txt").apply { writeText("Added secret 2") }
+    assertFalse(ArchiveEngine.addFilesToArchive(zipFile, listOf(f2)).success)
+
+    // With password, create folder, add file, rename, and delete preserve AES-256 encryption
+    assertTrue(ArchiveEngine.createFolderInArchive(zipFile, "", "Sub", password = "pw1").success)
+    assertTrue(ArchiveEngine.addFilesToArchive(zipFile, listOf(f2), targetVirtualDir = "Sub", password = "pw1").success)
+    assertTrue(ArchiveEngine.renameEntryInArchive(zipFile, "Sub/two.txt", "renamed.txt", password = "pw1").success)
+
+    var info = ArchiveEngine.readArchive(zipFile).getOrThrow()
+    assertTrue(info.isEncrypted)
+    assertEquals(ArchiveEncryptionMethod.AES_256, info.encryptionMethod)
+    assertEquals("Added secret 2", ArchiveEngine.readEntryText(zipFile, "Sub/renamed.txt", password = "pw1"))
+
+    // Change password & switch method to ZipCrypto
+    val rekeyRes = ArchiveEngine.updateArchivePassword(
+      archiveFile = zipFile,
+      currentPassword = "pw1",
+      newPassword = "pw2",
+      encryptionMethod = ArchiveEncryptionMethod.ZIP_CRYPTO,
+    )
+    assertTrue(rekeyRes.success)
+    assertFalse(ArchiveEngine.verifyArchivePassword(zipFile, "pw1").getOrThrow())
+    assertTrue(ArchiveEngine.verifyArchivePassword(zipFile, "pw2").getOrThrow())
+    assertEquals(ArchiveEncryptionMethod.ZIP_CRYPTO, ArchiveEngine.readArchive(zipFile).getOrThrow().encryptionMethod)
+
+    // Remove password protection completely
+    val removePwRes = ArchiveEngine.updateArchivePassword(
+      archiveFile = zipFile,
+      currentPassword = "pw2",
+      newPassword = null,
+      encryptionMethod = ArchiveEncryptionMethod.NONE,
+    )
+    assertTrue(removePwRes.success)
+    info = ArchiveEngine.readArchive(zipFile).getOrThrow()
+    assertFalse(info.isEncrypted)
+    assertEquals("Initial secret 1", ArchiveEngine.readEntryText(zipFile, "one.txt"))
+    assertEquals("Added secret 2", ArchiveEngine.readEntryText(zipFile, "Sub/renamed.txt"))
+  }
 }

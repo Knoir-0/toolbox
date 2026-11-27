@@ -444,69 +444,91 @@ fun UnitConverterScreen(
       },
     )
 
-    LazyColumn(
+    ToolboxPillHorizontalPager(
+      items = UnitCategory.entries,
+      selectedItem = selectedCategory,
+      key = { _, category -> category.name },
+      onSelectItem = { category ->
+        selectedCategory = category
+        val (defFrom, defTo) = UnitCatalog.defaultIndicesFor(category)
+        fromIndex = defFrom
+        toIndex = defTo
+      },
       modifier = Modifier
         .fillMaxWidth()
-        .weight(1f)
-        .swipeToSwitchPillView(
-          items = UnitCategory.entries,
-          selectedItem = selectedCategory,
-          onSelectItem = { category ->
-            selectedCategory = category
-            val (defFrom, defTo) = UnitCatalog.defaultIndicesFor(category)
-            fromIndex = defFrom
-            toIndex = defTo
-          },
-        ),
-      contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-    ) {
-    // 1. Hero Conversion Card
-    item {
-      ConversionHeroCard(
-        category = selectedCategory,
-        units = units,
-        fromUnit = fromUnit,
-        toUnit = toUnit,
-        onSelectFromUnit = { fromIndex = it },
-        onSelectToUnit = { toIndex = it },
-        inputText = inputText,
-        onInputChange = { newText ->
-          if (newText.isEmpty() || newText == "-" || newText == "." || newText == "-." || newText.toDoubleOrNull() != null) {
-            inputText = newText
-          }
-        },
-        convertedFormatted = UnitCatalog.formatNumber(convertedValue),
-        rateFormatted = "1 ${fromUnit.symbol} = ${UnitCatalog.formatNumber(singleUnitRate)} ${toUnit.symbol}",
-        swapRotation = swapRotation.value,
-        onSwapUnits = ::swapUnits,
-        palette = palette,
-      )
-      Spacer(modifier = Modifier.height(6.dp))
-    }
+        .weight(1f),
+    ) { pageCategory ->
+      val isActivePage = pageCategory == selectedCategory
+      val pageUnits = remember(pageCategory) { UnitCatalog.unitsFor(pageCategory) }
+      val (pageFromIdx, pageToIdx) = if (isActivePage) {
+        safeFromIndex to safeToIndex
+      } else {
+        remember(pageCategory) {
+          val (df, dt) = UnitCatalog.defaultIndicesFor(pageCategory)
+          df.coerceIn(0, pageUnits.lastIndex) to dt.coerceIn(0, pageUnits.lastIndex)
+        }
+      }
+      val pageFromUnit = pageUnits[pageFromIdx]
+      val pageToUnit = pageUnits[pageToIdx]
+      val pageConvertedValue = remember(numericInput, pageFromUnit, pageToUnit) {
+        UnitCatalog.convert(numericInput, pageFromUnit, pageToUnit)
+      }
+      val pageSingleUnitRate = remember(pageFromUnit, pageToUnit) {
+        UnitCatalog.convert(1.0, pageFromUnit, pageToUnit)
+      }
 
-    // 2. Quick Value Presets
-    item {
-      QuickValuePresetsRow(
-        category = selectedCategory,
-        currentInput = inputText,
-        onSelectPreset = { preset -> inputText = preset },
-        palette = palette,
-      )
-      Spacer(modifier = Modifier.height(6.dp))
-    }
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+      ) {
+        // 1. Hero Conversion Card
+        item {
+          ConversionHeroCard(
+            category = pageCategory,
+            units = pageUnits,
+            fromUnit = pageFromUnit,
+            toUnit = pageToUnit,
+            onSelectFromUnit = { if (isActivePage) fromIndex = it },
+            onSelectToUnit = { if (isActivePage) toIndex = it },
+            inputText = inputText,
+            onInputChange = { newText ->
+              if (newText.isEmpty() || newText == "-" || newText == "." || newText == "-." || newText.toDoubleOrNull() != null) {
+                inputText = newText
+              }
+            },
+            convertedFormatted = UnitCatalog.formatNumber(pageConvertedValue),
+            rateFormatted = "1 ${pageFromUnit.symbol} = ${UnitCatalog.formatNumber(pageSingleUnitRate)} ${pageToUnit.symbol}",
+            swapRotation = if (isActivePage) swapRotation.value else 0f,
+            onSwapUnits = ::swapUnits,
+            palette = palette,
+          )
+          Spacer(modifier = Modifier.height(6.dp))
+        }
 
-    // 3. Unified All-Units Comparison Card
-    item {
-      AllUnitsComparisonCard(
-        category = selectedCategory,
-        units = units,
-        numericInput = numericInput,
-        fromUnit = fromUnit,
-        toUnit = toUnit,
-        onSelectTargetUnit = { index -> toIndex = index },
-        palette = palette,
-      )
-    }
+        // 2. Quick Value Presets
+        item {
+          QuickValuePresetsRow(
+            category = pageCategory,
+            currentInput = inputText,
+            onSelectPreset = { preset -> inputText = preset },
+            palette = palette,
+          )
+          Spacer(modifier = Modifier.height(6.dp))
+        }
+
+        // 3. Unified All-Units Comparison Card
+        item {
+          AllUnitsComparisonCard(
+            category = pageCategory,
+            units = pageUnits,
+            numericInput = numericInput,
+            fromUnit = pageFromUnit,
+            toUnit = pageToUnit,
+            onSelectTargetUnit = { index -> if (isActivePage) toIndex = index },
+            palette = palette,
+          )
+        }
+      }
     }
   }
 }

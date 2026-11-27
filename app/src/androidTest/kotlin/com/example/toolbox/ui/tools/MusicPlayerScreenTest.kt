@@ -1789,4 +1789,99 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("album_more_Synthwave Sessions").assertIsDisplayed()
     composeTestRule.onNodeWithTag("play_album_Synthwave Sessions").assertIsDisplayed()
   }
+
+  @Test
+  fun musicPlayer_backgroundWhisperIndexingGeneratesLrc_readsSrt_supportsLyricsSearch_andSyncedLiveLyricsSeek() {
+    val tempMusicDir = File(
+      composeTestRule.activity.cacheDir,
+      "music_whisper_ui_test_${System.currentTimeMillis()}",
+    ).apply { mkdirs() }
+
+    val baseWav = MusicPlayerEngine.ensurePlayableSampleWavFile(
+      tempMusicDir,
+      MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.first(),
+    )
+    val lrcGeneratedAudio = File(tempMusicDir, "Aurora Synth - Starlight Vocal.wav")
+    val srtExistingAudio = File(tempMusicDir, "Velvet Trio - Midnight Cafe.wav")
+    baseWav.copyTo(lrcGeneratedAudio, overwrite = true)
+    baseWav.copyTo(srtExistingAudio, overwrite = true)
+
+    // Provide an existing .srt sidecar next to the second song
+    File(tempMusicDir, "Velvet Trio - Midnight Cafe.srt").writeText(
+      """
+      1
+      00:00:01,000 --> 00:00:05,000
+      Espresso steam rising in the jazz club
+      """.trimIndent(),
+      Charsets.UTF_8,
+    )
+
+    MusicPlayerEngine.customWhisperTranscriberForTest = { _, track ->
+      SpeechTranscriptDocument(
+        rawText = "Neon skyline shining bright We ride into the dawn",
+        segments = listOf(
+          SpeechTranscriptSegment(startMs = 1_000L, endMs = 6_000L, text = "Neon skyline shining bright"),
+          SpeechTranscriptSegment(startMs = 6_500L, endMs = 12_000L, text = "We ride into the dawn"),
+        ),
+        title = track.title,
+      )
+    }
+
+    val tracks = MusicPlayerEngine.scanMusicDirectories(
+      directories = listOf(tempMusicDir),
+      inspectMetadataRetriever = false,
+    )
+
+    try {
+      composeTestRule.setContent {
+        ToolboxTheme {
+          MusicPlayerScreen(
+            initialTracks = tracks,
+            initialTab = MusicLibraryTab.SONGS,
+          )
+        }
+      }
+      composeTestRule.waitUntil(timeoutMillis = 5_000L) {
+        val s = MusicPlayerEngine.getActivePlaybackSession()
+        s != null && s.trackLyricsMap.size == 2 && !s.isIndexingLyrics
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Background indexing generated the .lrc sidecar next to the first song and kept .srt on the second
+      assertTrue(File(tempMusicDir, "Aurora Synth - Starlight Vocal.lrc").exists())
+      assertFalse(File(tempMusicDir, "Velvet Trio - Midnight Cafe.lrc").exists())
+
+      // 2. Toolbar search in Songs finds songs by both Whisper-generated .lrc lyrics and .srt lyrics
+      composeTestRule.onNodeWithTag("music_search_toggle").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("music_search_input").performTextInput("jazz club")
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithText("Midnight Cafe").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Starlight Vocal").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("music_search_toggle").performClick()
+      composeTestRule.waitForIdle()
+
+      // 3. Play "Starlight Vocal", expand the full player, toggle Lyrics pill, and tap second lyric line to seek
+      val starlightTrack = tracks.first { it.file == lrcGeneratedAudio }
+      composeTestRule.onNodeWithTag("song_item_${starlightTrack.id}").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("mini_player_album_art").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("expanded_player_lyrics_button").assertIsDisplayed().performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("expanded_player_lyrics_panel").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Neon skyline shining bright").assertIsDisplayed()
+      composeTestRule.onNodeWithText("We ride into the dawn").assertIsDisplayed()
+
+      composeTestRule.onNodeWithTag("lyric_line_1").performClick()
+      composeTestRule.waitForIdle()
+      val session = MusicPlayerEngine.getActivePlaybackSession()!!
+      assertTrue(session.currentPositionMs >= 6_500L)
+      composeTestRule.onNodeWithTag("lyric_line_1").assertIsSelected()
+    } finally {
+      MusicPlayerEngine.resetPlaybackSession()
+      tempMusicDir.deleteRecursively()
+    }
+  }
 }

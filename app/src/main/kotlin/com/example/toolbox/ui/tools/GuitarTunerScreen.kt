@@ -1851,122 +1851,142 @@ private fun TuningCatalogSearchOverlay(
         else -> 0
       }
 
-      // Matching Tunings List
-      LazyColumn(
+      // Horizontally Paginated Matching Tunings List across Categories
+      ToolboxPillHorizontalPager(
+        items = tunerSearchPillIndices,
+        selectedItem = activeTunerSearchPillIndex,
+        key = { _, idx -> "tuner_cat_$idx" },
+        onSelectItem = { idx ->
+          when (idx) {
+            0 -> {
+              if (favoritesOnly) onToggleFavoritesOnly()
+              onSelectCategory(null)
+            }
+            1 -> {
+              if (!favoritesOnly) onToggleFavoritesOnly()
+              onSelectCategory(null)
+            }
+            else -> {
+              val cat = GuitarTuningCategory.entries.getOrNull(idx - 2)
+              if (cat != null) {
+                if (favoritesOnly) onToggleFavoritesOnly()
+                onSelectCategory(cat)
+              }
+            }
+          }
+        },
         modifier = Modifier
           .fillMaxSize()
-          .weight(1f)
-          .swipeToSwitchPillView(
-            items = tunerSearchPillIndices,
-            selectedItem = activeTunerSearchPillIndex,
-            onSelectItem = { idx ->
-              when (idx) {
-                0 -> {
-                  if (favoritesOnly) onToggleFavoritesOnly()
-                  onSelectCategory(null)
-                }
-                1 -> {
-                  if (!favoritesOnly) onToggleFavoritesOnly()
-                  onSelectCategory(null)
-                }
-                else -> {
-                  val cat = GuitarTuningCategory.entries.getOrNull(idx - 2)
-                  if (cat != null) {
-                    if (favoritesOnly) onToggleFavoritesOnly()
-                    onSelectCategory(cat)
-                  }
-                }
-              }
-            },
-          )
-          .testTag("catalog_results_section"),
-        contentPadding = PaddingValues(
-          start = 16.dp,
-          top = 12.dp,
-          end = 16.dp,
-          bottom = 24.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        item(key = "catalog_header") {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Column {
-              Text(
-                text = when {
-                  query.isNotBlank() -> "Search Results (${matchingPresets.size})"
-                  favoritesOnly -> "Favorite Tunings (${matchingPresets.size})"
-                  selectedCategory != null -> "${selectedCategory.displayName} (${matchingPresets.size})"
-                  else -> "Tuning Catalog (${matchingPresets.size})"
-                },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
-              Text(
-                text = "Tap a tuning to switch • Tap ★ to favorite",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
+          .weight(1f),
+      ) { pageIdx ->
+        val isActivePage = pageIdx == activeTunerSearchPillIndex
+        val pageFavOnly = pageIdx == 1
+        val pageCat = if (pageIdx >= 2) GuitarTuningCategory.entries.getOrNull(pageIdx - 2) else null
+        val pagePresets = if (isActivePage) {
+          matchingPresets
+        } else {
+          remember(query, pageFavOnly, pageCat, favoritePresets) {
+            GuitarTunerEngine.searchTunings(
+              query = query,
+              category = pageCat,
+              favoritesOnly = pageFavOnly,
+              favorites = favoritePresets,
+            )
           }
         }
 
-        if (matchingPresets.isEmpty()) {
-          item(key = "catalog_empty") {
-            Card(
-              shape = RoundedCornerShape(14.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-              ),
-              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("catalog_empty_card"),
+        LazyColumn(
+          modifier = Modifier
+            .fillMaxSize()
+            .then(if (isActivePage) Modifier.testTag("catalog_results_section") else Modifier),
+          contentPadding = PaddingValues(
+            start = 16.dp,
+            top = 12.dp,
+            end = 16.dp,
+            bottom = 24.dp,
+          ),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          item(key = "catalog_header") {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-              Column(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-              ) {
+              Column {
                 Text(
-                  text = if (query.isNotBlank()) {
-                    "No tunings found matching \"$query\""
-                  } else {
-                    "No matching tunings"
+                  text = when {
+                    query.isNotBlank() -> "Search Results (${pagePresets.size})"
+                    pageFavOnly -> "Favorite Tunings (${pagePresets.size})"
+                    pageCat != null -> "${pageCat.displayName} (${pagePresets.size})"
+                    else -> "Tuning Catalog (${pagePresets.size})"
                   },
-                  style = MaterialTheme.typography.bodyMedium,
+                  style = MaterialTheme.typography.titleMedium,
                   fontWeight = FontWeight.SemiBold,
                   color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                  text = "Try searching by tuning name (e.g. Drop D, Open G, DADGAD) or string notes.",
+                  text = "Tap a tuning to switch • Tap ★ to favorite",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  textAlign = TextAlign.Center,
                 )
               }
             }
           }
-        } else {
-          items(
-            items = matchingPresets,
-            key = { "catalog_${it.name}" },
-          ) { preset ->
-            TuningPresetCard(
-              preset = preset,
-              isSelected = preset == selectedPreset,
-              isFavorite = preset in favoritePresets,
-              onSelect = { onSelectPreset(preset) },
-              onToggleFavorite = { onToggleFavorite(preset) },
-              cardTestTag = "catalog_tuning_card_${preset.name}",
-              favoriteButtonTestTag = "catalog_favorite_button_${preset.name}",
-            )
+
+          if (pagePresets.isEmpty()) {
+            item(key = "catalog_empty") {
+              Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .then(if (isActivePage) Modifier.testTag("catalog_empty_card") else Modifier),
+              ) {
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  Text(
+                    text = if (query.isNotBlank()) {
+                      "No tunings found matching \"$query\""
+                    } else {
+                      "No matching tunings"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                  Text(
+                    text = "Try searching by tuning name (e.g. Drop D, Open G, DADGAD) or string notes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                  )
+                }
+              }
+            }
+          } else {
+            items(
+              items = pagePresets,
+              key = { "catalog_${it.name}" },
+            ) { preset ->
+              TuningPresetCard(
+                preset = preset,
+                isSelected = preset == selectedPreset,
+                isFavorite = preset in favoritePresets,
+                onSelect = { onSelectPreset(preset) },
+                onToggleFavorite = { onToggleFavorite(preset) },
+                cardTestTag = if (isActivePage) "catalog_tuning_card_${preset.name}" else "preview_tuning_card_${preset.name}",
+                favoriteButtonTestTag = if (isActivePage) "catalog_favorite_button_${preset.name}" else "preview_favorite_button_${preset.name}",
+              )
+            }
           }
         }
       }

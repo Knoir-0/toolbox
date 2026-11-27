@@ -418,23 +418,17 @@ fun StarsScreen(
       }
     }
 
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .swipeToSwitchPillView(
-          items = StarsTab.entries,
-          selectedItem = selectedTab,
-          enabled = !isSearchActive,
-          onSelectItem = { tab ->
-            selectedTab = tab
-          },
-        ),
-    ) {
-      // Main tab content
-      AnimatedContent(
-        targetState = selectedTab,
-        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
-        label = "stars_tab_content",
+    Box(modifier = Modifier.fillMaxSize()) {
+      // Horizontally Paginated Main Tab Content
+      ToolboxPillHorizontalPager(
+        items = StarsTab.entries,
+        selectedItem = selectedTab,
+        enabled = !isSearchActive,
+        key = { _, tab -> tab.name },
+        onSelectItem = { tab ->
+          selectedTab = tab
+        },
+        modifier = Modifier.fillMaxSize(),
       ) { tab ->
         when (tab) {
           StarsTab.TODAY -> StarsTodayTabContent(
@@ -627,73 +621,94 @@ fun StarsScreen(
               }
             }
 
-            LazyColumn(
-              modifier = Modifier
-                .fillMaxSize()
-                .swipeToSwitchPillView(
-                  items = StarsGuideCategory.entries,
-                  selectedItem = searchCategory,
-                  onSelectItem = { category ->
-                    searchCategory = category
-                  },
-                ),
-              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-              verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-              item {
-                Text(
-                  text = "${filteredCatalogEntries.size} astrological reference entries",
-                  style = MaterialTheme.typography.labelMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                )
-              }
-
-              if (filteredCatalogEntries.isEmpty()) {
-                item {
-                  Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(
-                      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                  ) {
-                    Column(
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                      horizontalAlignment = Alignment.CenterHorizontally,
-                      verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                      Text(
-                        text = "No matching stars or placements",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                      )
-                      Text(
-                        text = "Try searching for a sign (Taurus, Scorpio), planet (Venus, Moon), house (7th House), or aspect (Trine).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                      )
+            ToolboxPillHorizontalPager(
+              items = StarsGuideCategory.entries,
+              selectedItem = searchCategory,
+              key = { _, cat -> "search_${cat.name}" },
+              onSelectItem = { category ->
+                searchCategory = category
+              },
+              modifier = Modifier.fillMaxSize(),
+            ) { pageCategory ->
+              val pageEntries = if (pageCategory == searchCategory) {
+                filteredCatalogEntries
+              } else {
+                remember(searchQuery, pageCategory, favoriteGuideIds) {
+                  val q = searchQuery.trim().lowercase(Locale.US)
+                  val tokens = q.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                  StarsEngine.GUIDE_CATALOG.filter { entry ->
+                    val matchesCat = when (pageCategory) {
+                      StarsGuideCategory.ALL -> true
+                      StarsGuideCategory.FAVORITES -> entry.id in favoriteGuideIds
+                      else -> entry.category == pageCategory
                     }
+                    if (!matchesCat) return@filter false
+                    if (tokens.isEmpty()) return@filter true
+                    val haystack = "${entry.title} ${entry.subtitle} ${entry.summary} ${entry.keywords}".lowercase(Locale.US)
+                    tokens.all { haystack.contains(it) }
                   }
                 }
-              } else {
-                items(filteredCatalogEntries, key = { it.id }) { entry ->
-                  StarsGuideEntryCard(
-                    entry = entry,
-                    isFavorite = entry.id in favoriteGuideIds,
-                    onToggleFavorite = {
-                      haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                      favoriteGuideIds = starsRepo.toggleFavoriteGuideId(entry.id)
-                    },
-                    onClick = {
-                      haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                      inspectedGuideEntry = entry
-                    },
+              }
+              LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                item {
+                  Text(
+                    text = "${pageEntries.size} astrological reference entries",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                   )
+                }
+
+                if (pageEntries.isEmpty()) {
+                  item {
+                    Card(
+                      shape = RoundedCornerShape(14.dp),
+                      colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                      ),
+                      modifier = Modifier.fillMaxWidth(),
+                    ) {
+                      Column(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Text(
+                          text = "No matching stars or placements",
+                          style = MaterialTheme.typography.titleMedium,
+                          fontWeight = FontWeight.SemiBold,
+                          color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                          text = "Try searching for a sign (Taurus, Scorpio), planet (Venus, Moon), house (7th House), or aspect (Trine).",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          textAlign = TextAlign.Center,
+                        )
+                      }
+                    }
+                  }
+                } else {
+                  items(pageEntries, key = { it.id }) { entry ->
+                    StarsGuideEntryCard(
+                      entry = entry,
+                      isFavorite = entry.id in favoriteGuideIds,
+                      onToggleFavorite = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        favoriteGuideIds = starsRepo.toggleFavoriteGuideId(entry.id)
+                      },
+                      onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        inspectedGuideEntry = entry
+                      },
+                    )
+                  }
                 }
               }
             }
@@ -2586,25 +2601,42 @@ private fun StarsGuideTabContent(
       }
     }
 
-    LazyColumn(
-      modifier = Modifier
-        .fillMaxSize()
-        .swipeToSwitchPillView(
-          items = StarsGuideCategory.entries,
-          selectedItem = selectedCategory,
-          onSelectItem = { onSelectCategory(it) },
-        )
-        .testTag("stars_guide_list"),
-      contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      items(entries, key = { it.id }) { entry ->
-        StarsGuideEntryCard(
-          entry = entry,
-          isFavorite = entry.id in favoriteIds,
-          onToggleFavorite = { onToggleFavorite(entry) },
-          onClick = { onInspectEntry(entry) },
-        )
+    ToolboxPillHorizontalPager(
+      items = StarsGuideCategory.entries,
+      selectedItem = selectedCategory,
+      key = { _, cat -> "guide_${cat.name}" },
+      onSelectItem = { onSelectCategory(it) },
+      modifier = Modifier.fillMaxSize(),
+    ) { pageCategory ->
+      val isActiveGuidePage = pageCategory == selectedCategory
+      val pageEntries = if (isActiveGuidePage) {
+        entries
+      } else {
+        remember(pageCategory, favoriteIds) {
+          StarsEngine.GUIDE_CATALOG.filter { entry ->
+            when (pageCategory) {
+              StarsGuideCategory.ALL -> true
+              StarsGuideCategory.FAVORITES -> entry.id in favoriteIds
+              else -> entry.category == pageCategory
+            }
+          }
+        }
+      }
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .then(if (isActiveGuidePage) Modifier.testTag("stars_guide_list") else Modifier),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        items(pageEntries, key = { it.id }) { entry ->
+          StarsGuideEntryCard(
+            entry = entry,
+            isFavorite = entry.id in favoriteIds,
+            onToggleFavorite = { onToggleFavorite(entry) },
+            onClick = { onInspectEntry(entry) },
+          )
+        }
       }
     }
   }

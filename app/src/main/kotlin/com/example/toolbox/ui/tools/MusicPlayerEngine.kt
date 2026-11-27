@@ -71,6 +71,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.arthenica.ffmpegkit.FFmpegKit
+import com.arthenica.ffmpegkit.ReturnCode
 import com.example.toolbox.MainActivity
 import com.example.toolbox.R
 import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
@@ -105,6 +107,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -691,6 +694,33 @@ data class MusicAlbumGroup(
 )
 
 /**
+ * Single timestamped lyric line parsed from a sidecar `.lrc` or `.srt` lyric file.
+ */
+@Immutable
+data class MusicLyricLine(
+  val startMs: Long,
+  val endMs: Long,
+  val text: String,
+) {
+  val timestampFormatted: String = MusicPlayerEngine.formatLrcTimestamp(startMs)
+}
+
+/**
+ * Parsed synchronized lyrics document associated with a [MusicTrack].
+ */
+@Immutable
+data class MusicLyricsDocument(
+  val lines: List<MusicLyricLine>,
+  val plainText: String = lines.joinToString("\n") { it.text },
+  val sourceFile: File? = null,
+  val sourceFormat: String = "LRC",
+  val isInstrumental: Boolean = false,
+) {
+  val hasLyrics: Boolean
+    get() = lines.isNotEmpty() && !isInstrumental
+}
+
+/**
  * Core engine for the Music Player tool:
  * - Scans local music directories and extracts ID3 / audio metadata
  * - Provides a rich built-in multi-genre sample library with synthesized harmonic WAV audio
@@ -704,6 +734,12 @@ object MusicPlayerEngine {
   val SUPPORTED_MUSIC_EXTENSIONS: Set<String> = setOf(
     "mp3", "m4a", "wav", "flac", "ogg", "aac", "opus",
   )
+
+  val SUPPORTED_LYRICS_EXTENSIONS: Set<String> = setOf(
+    "lrc", "srt",
+  )
+
+  const val INSTRUMENTAL_LYRIC_MARKER = "♪ Instrumental ♪"
 
   val PLAYBACK_SPEED_OPTIONS: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
@@ -874,10 +910,24 @@ object MusicPlayerEngine {
   private var artworkDiskCacheDir: File? = null
 
   @Volatile
+  private var lyricsFallbackDiskDir: File? = null
+
+  @Volatile
   private var trackIndexDiskCacheFile: File? = null
 
   @Volatile
   private var diskIndexLoadedForPath: String? = null
+
+  private val lyricsCacheLock = Any()
+
+  @Volatile
+  var customWhisperTranscriberForTest: (suspend (File, MusicTrack) -> SpeechTranscriptDocument?)? = null
+
+  private val lyricsCacheByAudioPath = object : LinkedHashMap<String, MusicLyricsDocument>(256, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MusicLyricsDocument>?): Boolean {
+      return size > MAX_TRACK_METADATA_CACHE_ENTRIES
+    }
+  }
 
   private val artworkBitmapCache = object : LinkedHashMap<String, Bitmap>(64, 0.75f, true) {
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
@@ -929,6 +979,7 @@ object MusicPlayerEngine {
   fun configureDiskCache(cacheDir: File?, indexCacheFile: File? = null) {
     if (cacheDir == null) {
       artworkDiskCacheDir = null
+      lyricsFallbackDiskDir = null
       if (indexCacheFile == null) {
         trackIndexDiskCacheFile = null
       }
@@ -940,6 +991,13 @@ object MusicPlayerEngine {
       artworkDiskCacheDir = dir
     } catch (_: Throwable) {
       artworkDiskCacheDir = null
+    }
+    val lyricsDir = File(cacheDir, "music_player_lyrics_cache")
+    try {
+      if (!lyricsDir.exists()) lyricsDir.mkdirs()
+      lyricsFallbackDiskDir = lyricsDir
+    } catch (_: Throwable) {
+      lyricsFallbackDiskDir = null
     }
     try {
       trackIndexDiskCacheFile = indexCacheFile ?: File(cacheDir, MUSIC_INDEX_CACHE_FILE_NAME)
@@ -974,6 +1032,9 @@ object MusicPlayerEngine {
       trackIndexByPath.clear()
       libraryTracksCache.clear()
       diskIndexLoadedForPath = null
+    }
+    synchronized(lyricsCacheLock) {
+      lyricsCacheByAudioPath.clear()
     }
   }
 
@@ -4749,57 +4810,785 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Filters [tracks] by matching [query] against title, artist, album, or genre.
+   * Filters [tracks] by matching [query] against title, artist, album, genre, or indexed lyrics.
    */
-  fun filterTracks(tracks: List<MusicTrack>, query: String): List<MusicTrack> {
+  fun filterTracks(
+    tracks: List<MusicTrack>,
+    query: String,
+    lyricsMap: Map<String, MusicLyricsDocument> = emptyMap(),
+  ): List<MusicTrack> {
     val q = query.trim()
     if (q.isEmpty()) return tracks
     return tracks.filter { track ->
       track.title.contains(q, ignoreCase = true) ||
         track.artist.contains(q, ignoreCase = true) ||
         track.album.contains(q, ignoreCase = true) ||
-        track.genre.contains(q, ignoreCase = true)
+        track.genre.contains(q, ignoreCase = true) ||
+        trackMatchesLyricsQuery(track, q, lyricsMap)
     }
   }
 
   /**
-   * Filters [artists] by matching [query] against artist name, album names, or track titles.
+   * Returns `true` if [track]'s non-instrumental lyrics in [lyricsMap] (or cached by file path)
+   * contain [query] (case-insensitive).
    */
-  fun filterArtists(artists: List<MusicArtist>, query: String): List<MusicArtist> {
+  fun trackMatchesLyricsQuery(
+    track: MusicTrack,
+    query: String,
+    lyricsMap: Map<String, MusicLyricsDocument> = emptyMap(),
+  ): Boolean {
+    val q = query.trim()
+    if (q.isEmpty()) return false
+    val doc = lyricsMap[track.id]
+      ?: track.file?.let { file ->
+        synchronized(lyricsCacheLock) { lyricsCacheByAudioPath[file.absolutePath] }
+      }
+      ?: return false
+    return doc.hasLyrics && doc.plainText.contains(q, ignoreCase = true)
+  }
+
+  /**
+   * Finds the first [MusicLyricLine] in [lyrics] whose text matches [query] (case-insensitive),
+   * or `null` when no line matches.
+   */
+  fun findMatchingLyricLine(
+    lyrics: MusicLyricsDocument?,
+    query: String,
+  ): MusicLyricLine? {
+    val q = query.trim()
+    if (q.isEmpty() || lyrics == null || !lyrics.hasLyrics) return null
+    return lyrics.lines.firstOrNull { it.text.contains(q, ignoreCase = true) }
+  }
+
+  /**
+   * Filters [artists] by matching [query] against artist name, album names, track titles, or lyrics.
+   */
+  fun filterArtists(
+    artists: List<MusicArtist>,
+    query: String,
+    lyricsMap: Map<String, MusicLyricsDocument> = emptyMap(),
+  ): List<MusicArtist> {
     val q = query.trim()
     if (q.isEmpty()) return artists
     return artists.filter { artist ->
       artist.name.contains(q, ignoreCase = true) ||
         artist.albums.any { it.name.contains(q, ignoreCase = true) } ||
-        artist.tracks.any { it.title.contains(q, ignoreCase = true) }
+        artist.tracks.any {
+          it.title.contains(q, ignoreCase = true) || trackMatchesLyricsQuery(it, q, lyricsMap)
+        }
     }
   }
 
   /**
-   * Filters [albums] by matching [query] against album name, artist name, genre, or track titles.
+   * Filters [albums] by matching [query] against album name, artist name, genre, track titles, or lyrics.
    */
-  fun filterAlbums(albums: List<MusicAlbum>, query: String): List<MusicAlbum> {
+  fun filterAlbums(
+    albums: List<MusicAlbum>,
+    query: String,
+    lyricsMap: Map<String, MusicLyricsDocument> = emptyMap(),
+  ): List<MusicAlbum> {
     val q = query.trim()
     if (q.isEmpty()) return albums
     return albums.filter { album ->
       album.name.contains(q, ignoreCase = true) ||
         album.artist.contains(q, ignoreCase = true) ||
         album.genre.contains(q, ignoreCase = true) ||
-        album.tracks.any { it.title.contains(q, ignoreCase = true) }
+        album.tracks.any {
+          it.title.contains(q, ignoreCase = true) || trackMatchesLyricsQuery(it, q, lyricsMap)
+        }
     }
   }
 
   /**
-   * Filters [genres] by matching [query] against genre name, artists, or track titles.
+   * Filters [genres] by matching [query] against genre name, artists, track titles, or lyrics.
    */
-  fun filterGenres(genres: List<MusicGenre>, query: String): List<MusicGenre> {
+  fun filterGenres(
+    genres: List<MusicGenre>,
+    query: String,
+    lyricsMap: Map<String, MusicLyricsDocument> = emptyMap(),
+  ): List<MusicGenre> {
     val q = query.trim()
     if (q.isEmpty()) return genres
     return genres.filter { genre ->
       genre.name.contains(q, ignoreCase = true) ||
         genre.artists.any { it.contains(q, ignoreCase = true) } ||
-        genre.tracks.any { it.title.contains(q, ignoreCase = true) }
+        genre.tracks.any {
+          it.title.contains(q, ignoreCase = true) || trackMatchesLyricsQuery(it, q, lyricsMap)
+        }
     }
+  }
+
+  // ============================================================================
+  // SYNCHRONIZED LYRICS (.LRC & .SRT) + ON-DEVICE WHISPER BACKGROUND INDEXING
+  // ============================================================================
+
+  private val lrcTimestampTagRegex = Regex("""\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?]""")
+  private val lrcOffsetTagRegex = Regex("""^\[offset:\s*([+-]?\d+)\s*]$""", RegexOption.IGNORE_CASE)
+  private val lrcMetadataTagRegex = Regex(
+    """^\[(ti|ar|al|au|length|by|offset|re|ve|id|la|tool):.*]$""",
+    RegexOption.IGNORE_CASE,
+  )
+  private val nonVocalHallucinationRegex = Regex(
+    """^(?:\[\s*(?:blank_audio|music|instrumental|silence|applause|cheering|laughter|noise|inaudible|singing)[^\]]*]|\(\s*(?:blank_audio|music|instrumental|silence|applause|cheering|laughter|noise|inaudible|upbeat music|soft music|gentle music)[^)]*\)|[♪♫♬♩\s.,!?;:\-–—]+)+$""",
+    RegexOption.IGNORE_CASE,
+  )
+  private val inlineBracketNoiseRegex = Regex(
+    """\[\s*(?:blank_audio|music|instrumental|silence|inaudible)\s*]|\(\s*(?:blank_audio|music|instrumental|silence|inaudible)\s*\)""",
+    RegexOption.IGNORE_CASE,
+  )
+
+  /**
+   * Formats [ms] into a standard LRC `[mm:ss.xx]` centisecond timestamp tag.
+   */
+  fun formatLrcTimestamp(ms: Long): String {
+    val safeMs = ms.coerceAtLeast(0L)
+    val totalCentis = (safeMs + 5L) / 10L
+    val centis = totalCentis % 100L
+    val totalSeconds = totalCentis / 100L
+    val seconds = totalSeconds % 60L
+    val minutes = totalSeconds / 60L
+    return String.format(Locale.US, "[%02d:%02d.%02d]", minutes, seconds, centis)
+  }
+
+  /**
+   * Cleans raw Whisper segment text for song lyrics, stripping non-vocal markers such as
+   * `[BLANK_AUDIO]`, `[Music]`, `(Instrumental)`, and isolated music note glyphs.
+   * Returns an empty string if the segment contains no actual vocal text.
+   */
+  fun cleanWhisperLyricSegmentText(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return ""
+    if (nonVocalHallucinationRegex.matches(trimmed)) return ""
+    val stripped = inlineBracketNoiseRegex.replace(trimmed, " ")
+      .replace(Regex("""\s+"""), " ")
+      .trim()
+    if (stripped.isEmpty() || nonVocalHallucinationRegex.matches(stripped)) return ""
+    return stripped
+  }
+
+  /**
+   * Formats timestamped [segments] (from Whisper Speech-to-Text) into a standard `.lrc`
+   * synchronized lyrics document with optional ID tags from [track].
+   */
+  fun formatLyricsAsLrc(
+    track: MusicTrack? = null,
+    segments: List<SpeechTranscriptSegment>,
+    isInstrumental: Boolean = false,
+  ): String {
+    val cleanedSegments = if (isInstrumental) {
+      emptyList()
+    } else {
+      segments.mapNotNull { seg ->
+        val cleaned = cleanWhisperLyricSegmentText(seg.text)
+        if (cleaned.isEmpty()) {
+          null
+        } else {
+          SpeechTranscriptSegment(
+            startMs = seg.startMs.coerceAtLeast(0L),
+            endMs = max(seg.endMs, seg.startMs + 500L),
+            text = cleaned,
+          )
+        }
+      }
+    }
+
+    return buildString {
+      if (track != null) {
+        val cleanTitle = track.title.replace("\n", " ").replace("]", ")").trim()
+        val cleanArtist = track.artist.replace("\n", " ").replace("]", ")").trim()
+        val cleanAlbum = track.album.replace("\n", " ").replace("]", ")").trim()
+        if (cleanTitle.isNotEmpty()) appendLine("[ti:$cleanTitle]")
+        if (cleanArtist.isNotEmpty()) appendLine("[ar:$cleanArtist]")
+        if (cleanAlbum.isNotEmpty()) appendLine("[al:$cleanAlbum]")
+        if (track.durationMs > 0L) {
+          appendLine("[length:${AudioRecorderEngine.formatDurationMs(track.durationMs)}]")
+        }
+        appendLine("[by:Toolbox Whisper STT]")
+        appendLine()
+      }
+      if (cleanedSegments.isEmpty()) {
+        appendLine("${formatLrcTimestamp(0L)} $INSTRUMENTAL_LYRIC_MARKER")
+      } else {
+        for (seg in cleanedSegments) {
+          appendLine("${formatLrcTimestamp(seg.startMs)} ${seg.text}")
+        }
+      }
+    }
+  }
+
+  private fun isInstrumentalPlaceholderLine(text: String): Boolean {
+    val t = text.trim()
+    return t.equals(INSTRUMENTAL_LYRIC_MARKER, ignoreCase = true) ||
+      t.equals("Instrumental", ignoreCase = true) ||
+      t.equals("(Instrumental)", ignoreCase = true) ||
+      t.equals("[Instrumental]", ignoreCase = true) ||
+      t.equals("(No speech detected)", ignoreCase = true)
+  }
+
+  /**
+   * Parses a `.lrc` synchronized lyrics string into a [MusicLyricsDocument].
+   * Supports `[mm:ss.xx]`, `[mm:ss.xxx]`, `[mm:ss:xx]`, `[mm:ss]`, multi-timestamp chorus lines,
+   * and `[offset:+/-ms]` timing adjustments.
+   */
+  fun parseLrcLyrics(
+    lrcContent: String,
+    trackDurationMs: Long = 0L,
+    sourceFile: File? = null,
+  ): MusicLyricsDocument {
+    var offsetMs = 0L
+    val rawPairs = ArrayList<Pair<Long, String>>()
+    val plainUntimedLines = ArrayList<String>()
+
+    for (rawLine in lrcContent.replace("\r\n", "\n").lineSequence()) {
+      val line = rawLine.trim()
+      if (line.isEmpty()) continue
+      val offsetMatch = lrcOffsetTagRegex.matchEntire(line)
+      if (offsetMatch != null) {
+        offsetMs = offsetMatch.groupValues[1].toLongOrNull() ?: 0L
+        continue
+      }
+      val matches = lrcTimestampTagRegex.findAll(line).toList()
+      if (matches.isEmpty()) {
+        if (!lrcMetadataTagRegex.matches(line)) {
+          plainUntimedLines.add(line)
+        }
+        continue
+      }
+      val lyricText = line.substring(matches.last().range.last + 1).trim()
+      if (lyricText.isEmpty()) continue
+      for (match in matches) {
+        val minutes = match.groupValues[1].toLongOrNull() ?: 0L
+        val seconds = match.groupValues[2].toLongOrNull() ?: 0L
+        val fracStr = match.groupValues[3]
+        val millis = when (fracStr.length) {
+          0 -> 0L
+          1 -> (fracStr.toLongOrNull() ?: 0L) * 100L
+          2 -> (fracStr.toLongOrNull() ?: 0L) * 10L
+          else -> fracStr.take(3).toLongOrNull() ?: 0L
+        }
+        val ts = (minutes * 60_000L + seconds * 1_000L + millis + offsetMs).coerceAtLeast(0L)
+        rawPairs.add(ts to lyricText)
+      }
+    }
+
+    if (rawPairs.isEmpty() && plainUntimedLines.isNotEmpty()) {
+      val stepMs = if (trackDurationMs > 0L) {
+        (trackDurationMs / plainUntimedLines.size.coerceAtLeast(1)).coerceAtLeast(2_000L)
+      } else {
+        4_000L
+      }
+      plainUntimedLines.forEachIndexed { idx, txt ->
+        rawPairs.add((idx * stepMs) to txt)
+      }
+    }
+
+    rawPairs.sortBy { it.first }
+    val isInstrumental = rawPairs.size == 1 && isInstrumentalPlaceholderLine(rawPairs.first().second)
+    val resolvedLines = rawPairs.mapIndexed { idx, (startMs, text) ->
+      val nextStart = rawPairs.getOrNull(idx + 1)?.first
+      val endMs = when {
+        nextStart != null && nextStart > startMs -> nextStart
+        trackDurationMs > startMs -> trackDurationMs
+        else -> startMs + 4_000L
+      }
+      MusicLyricLine(
+        startMs = startMs,
+        endMs = endMs,
+        text = text,
+      )
+    }
+
+    return MusicLyricsDocument(
+      lines = resolvedLines,
+      plainText = if (isInstrumental) "" else resolvedLines.joinToString("\n") { it.text },
+      sourceFile = sourceFile,
+      sourceFormat = "LRC",
+      isInstrumental = isInstrumental,
+    )
+  }
+
+  /**
+   * Parses a SubRip (`.srt`) subtitle file string into a [MusicLyricsDocument] so `.srt` lyric
+   * sidecars are seamlessly supported alongside `.lrc`.
+   */
+  fun parseSrtLyrics(
+    srtContent: String,
+    trackDurationMs: Long = 0L,
+    sourceFile: File? = null,
+  ): MusicLyricsDocument {
+    val transcript = FileConverterEngine.parseSrtToSpeechTranscript(srtContent, "Lyrics")
+    val segments = transcript.segments.filter { it.text.isNotBlank() }
+    val isInstrumental = segments.size == 1 && isInstrumentalPlaceholderLine(segments.first().text)
+    val lines = segments.mapIndexed { idx, seg ->
+      val startMs = seg.startMs.coerceAtLeast(0L)
+      val nextStart = segments.getOrNull(idx + 1)?.startMs
+      val rawEnd = max(seg.endMs, startMs + 500L)
+      val endMs = when {
+        nextStart != null && nextStart in (startMs + 1)..<rawEnd -> nextStart
+        idx == segments.lastIndex && trackDurationMs > rawEnd -> rawEnd
+        else -> rawEnd
+      }
+      MusicLyricLine(
+        startMs = startMs,
+        endMs = endMs,
+        text = seg.text.trim(),
+      )
+    }
+    return MusicLyricsDocument(
+      lines = lines,
+      plainText = if (isInstrumental) "" else lines.joinToString("\n") { it.text },
+      sourceFile = sourceFile,
+      sourceFormat = "SRT",
+      isInstrumental = isInstrumental,
+    )
+  }
+
+  /**
+   * Reads and parses an existing `.lrc` or `.srt` [lyricsFile] into a [MusicLyricsDocument].
+   */
+  fun parseLyricsFile(
+    lyricsFile: File,
+    trackDurationMs: Long = 0L,
+  ): MusicLyricsDocument? {
+    if (!lyricsFile.exists() || !lyricsFile.isFile || lyricsFile.length() <= 0L) return null
+    return try {
+      val content = lyricsFile.readText(Charsets.UTF_8)
+      if (content.isBlank()) return null
+      if (lyricsFile.extension.equals("srt", ignoreCase = true)) {
+        parseSrtLyrics(content, trackDurationMs = trackDurationMs, sourceFile = lyricsFile)
+      } else {
+        parseLrcLyrics(content, trackDurationMs = trackDurationMs, sourceFile = lyricsFile)
+      }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Resolves the index of the currently active [MusicLyricLine] in [lines] at playback [positionMs],
+   * or `-1` if [lines] is empty or [positionMs] precedes the first timestamped line.
+   */
+  fun resolveActiveLyricLineIndex(
+    lines: List<MusicLyricLine>,
+    positionMs: Long,
+  ): Int {
+    if (lines.isEmpty()) return -1
+    val safePos = positionMs.coerceAtLeast(0L)
+    if (safePos < lines.first().startMs) return -1
+    var lo = 0
+    var hi = lines.lastIndex
+    var best = 0
+    while (lo <= hi) {
+      val mid = (lo + hi) ushr 1
+      if (lines[mid].startMs <= safePos) {
+        best = mid
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    return best
+  }
+
+  /**
+   * Returns the preferred sidecar `.lrc` [File] path alongside [audioFile] (e.g. `Song.mp3` -> `Song.lrc`).
+   */
+  fun resolvePreferredSidecarLrcFile(audioFile: File): File {
+    val parent = audioFile.parentFile
+    val stem = audioFile.nameWithoutExtension
+    return if (parent != null) File(parent, "$stem.lrc") else File("$stem.lrc")
+  }
+
+  private fun fallbackCachedLrcFile(audioFile: File): File? {
+    val dir = lyricsFallbackDiskDir ?: return null
+    val hash = (audioFile.absolutePath.hashCode() and 0x7FFFFFFF).toString(16)
+    val safeStem = audioFile.nameWithoutExtension.replace(Regex("""[^A-Za-z0-9._-]"""), "_").take(48)
+    return File(dir, "${safeStem}_$hash.lrc")
+  }
+
+  /**
+   * Locates an existing sidecar lyric file for [audioFile], preferring `.lrc` in the same folder,
+   * then `.srt` in the same folder (including case-insensitive sibling matches), and finally the
+   * internal fallback lyrics cache directory if the audio folder was read-only.
+   */
+  fun findExistingLyricsFile(audioFile: File): File? {
+    val parent = audioFile.parentFile
+    val stem = audioFile.nameWithoutExtension
+    if (parent != null && parent.exists() && parent.isDirectory) {
+      val exactLrc = File(parent, "$stem.lrc")
+      if (exactLrc.exists() && exactLrc.isFile && exactLrc.length() > 0L) return exactLrc
+
+      val exactSrt = File(parent, "$stem.srt")
+      if (exactSrt.exists() && exactSrt.isFile && exactSrt.length() > 0L) return exactSrt
+
+      val siblings = try {
+        parent.listFiles()
+      } catch (_: Throwable) {
+        null
+      }
+      if (siblings != null) {
+        siblings.firstOrNull {
+          it.isFile &&
+            it.length() > 0L &&
+            it.extension.equals("lrc", ignoreCase = true) &&
+            it.nameWithoutExtension.equals(stem, ignoreCase = true)
+        }?.let { return it }
+
+        siblings.firstOrNull {
+          it.isFile &&
+            it.length() > 0L &&
+            it.extension.equals("srt", ignoreCase = true) &&
+            it.nameWithoutExtension.equals(stem, ignoreCase = true)
+        }?.let { return it }
+      }
+    }
+
+    val fallback = fallbackCachedLrcFile(audioFile)
+    if (fallback != null && fallback.exists() && fallback.isFile && fallback.length() > 0L) {
+      return fallback
+    }
+    return null
+  }
+
+  /**
+   * Loads and caches existing `.lrc` or `.srt` sidecar lyrics for [track] if present on disk,
+   * without invoking Whisper transcription.
+   */
+  fun loadExistingLyricsForTrack(track: MusicTrack): MusicLyricsDocument? {
+    val audioFile = track.file ?: return null
+    if (track.isSampleTrack || !audioFile.exists()) return null
+    val existingLyricsFile = findExistingLyricsFile(audioFile) ?: run {
+      synchronized(lyricsCacheLock) {
+        lyricsCacheByAudioPath.remove(audioFile.absolutePath)
+      }
+      return null
+    }
+
+    synchronized(lyricsCacheLock) {
+      val cached = lyricsCacheByAudioPath[audioFile.absolutePath]
+      if (
+        cached != null &&
+        cached.sourceFile?.absolutePath == existingLyricsFile.absolutePath &&
+        cached.sourceFile.exists()
+      ) {
+        return cached
+      }
+    }
+
+    val parsed = parseLyricsFile(existingLyricsFile, trackDurationMs = track.durationMs) ?: return null
+    synchronized(lyricsCacheLock) {
+      lyricsCacheByAudioPath[audioFile.absolutePath] = parsed
+    }
+    return parsed
+  }
+
+  /**
+   * Keeps sidecar `.lrc` and `.srt` lyric files synchronized when an audio file is renamed.
+   */
+  fun renameSidecarLyricsFiles(oldAudioFile: File, newAudioFile: File) {
+    val parent = oldAudioFile.parentFile ?: return
+    val newParent = newAudioFile.parentFile ?: parent
+    val oldStem = oldAudioFile.nameWithoutExtension
+    val newStem = newAudioFile.nameWithoutExtension
+    if (oldStem == newStem && parent.absolutePath == newParent.absolutePath) return
+    for (ext in listOf("lrc", "srt")) {
+      val oldSidecar = File(parent, "$oldStem.$ext")
+      if (oldSidecar.exists() && oldSidecar.isFile) {
+        val targetSidecar = File(newParent, "$newStem.$ext")
+        if (!targetSidecar.exists()) {
+          oldSidecar.renameTo(targetSidecar)
+        }
+      }
+    }
+    synchronized(lyricsCacheLock) {
+      lyricsCacheByAudioPath.remove(oldAudioFile.absolutePath)
+    }
+  }
+
+  /**
+   * Copies sidecar `.lrc` and `.srt` lyric files alongside a duplicated audio file.
+   */
+  fun duplicateSidecarLyricsFiles(sourceAudioFile: File, duplicateAudioFile: File) {
+    val srcParent = sourceAudioFile.parentFile ?: return
+    val dstParent = duplicateAudioFile.parentFile ?: srcParent
+    val srcStem = sourceAudioFile.nameWithoutExtension
+    val dstStem = duplicateAudioFile.nameWithoutExtension
+    for (ext in listOf("lrc", "srt")) {
+      val srcSidecar = File(srcParent, "$srcStem.$ext")
+      if (srcSidecar.exists() && srcSidecar.isFile) {
+        val dstSidecar = File(dstParent, "$dstStem.$ext")
+        try {
+          if (!dstSidecar.exists()) {
+            srcSidecar.copyTo(dstSidecar, overwrite = false)
+          }
+        } catch (_: Throwable) {}
+      }
+    }
+  }
+
+  /**
+   * Deletes sidecar `.lrc` and `.srt` lyric files associated with [audioFile].
+   */
+  fun deleteSidecarLyricsFiles(audioFile: File) {
+    val parent = audioFile.parentFile
+    val stem = audioFile.nameWithoutExtension
+    if (parent != null) {
+      for (ext in listOf("lrc", "srt")) {
+        val sidecar = File(parent, "$stem.$ext")
+        try {
+          if (sidecar.exists() && sidecar.isFile) {
+            sidecar.delete()
+          }
+        } catch (_: Throwable) {}
+      }
+    }
+    try {
+      fallbackCachedLrcFile(audioFile)?.takeIf { it.exists() }?.delete()
+    } catch (_: Throwable) {}
+    synchronized(lyricsCacheLock) {
+      lyricsCacheByAudioPath.remove(audioFile.absolutePath)
+    }
+  }
+
+  private fun decodeAudioToTempWavForWhisper(
+    audioFile: File,
+    tempWav: File,
+  ): Boolean {
+    val nativeDecoded = try {
+      FileConverterEngine.convertMediaToWavNative(audioFile, tempWav) &&
+        tempWav.exists() &&
+        tempWav.length() > 44L
+    } catch (_: Throwable) {
+      false
+    }
+    if (nativeDecoded) return true
+
+    return try {
+      val args = arrayOf(
+        "-y",
+        "-i",
+        audioFile.absolutePath,
+        "-vn",
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        tempWav.absolutePath,
+      )
+      val session = FFmpegKit.executeWithArguments(args)
+      ReturnCode.isSuccess(session.returnCode) && tempWav.exists() && tempWav.length() > 44L
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  private fun writeSidecarLrcAtomically(
+    audioFile: File,
+    lrcContent: String,
+  ): File? {
+    val preferredFile = resolvePreferredSidecarLrcFile(audioFile)
+    try {
+      preferredFile.parentFile?.mkdirs()
+      val tmp = File(preferredFile.parentFile, ".${preferredFile.name}.tmp")
+      tmp.writeText(lrcContent, Charsets.UTF_8)
+      if (tmp.exists() && tmp.length() > 0L) {
+        if (preferredFile.exists()) preferredFile.delete()
+        if (tmp.renameTo(preferredFile) && preferredFile.exists()) {
+          return preferredFile
+        }
+      }
+      tmp.delete()
+      preferredFile.writeText(lrcContent, Charsets.UTF_8)
+      if (preferredFile.exists() && preferredFile.length() > 0L) {
+        return preferredFile
+      }
+    } catch (_: Throwable) {
+      // Fall through to app cache fallback if the music directory is read-only
+    }
+
+    val fallbackFile = fallbackCachedLrcFile(audioFile) ?: return null
+    return try {
+      fallbackFile.parentFile?.mkdirs()
+      fallbackFile.writeText(lrcContent, Charsets.UTF_8)
+      fallbackFile.takeIf { it.exists() && it.length() > 0L }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Generates a synchronized `.lrc` lyric sidecar file next to [track]'s audio file using on-device
+   * Whisper Speech-to-Text (or returns existing `.lrc` / `.srt` lyrics immediately unless
+   * [overwriteExisting] is `true`).
+   */
+  suspend fun generateSidecarLyricsForTrack(
+    track: MusicTrack,
+    context: Context? = null,
+    overwriteExisting: Boolean = false,
+    speechToTextRunner: (suspend (File, MusicTrack) -> SpeechTranscriptDocument?)? = customWhisperTranscriberForTest,
+  ): MusicLyricsDocument? = withContext(Dispatchers.IO) {
+    val audioFile = track.file ?: return@withContext null
+    if (track.isSampleTrack || !audioFile.exists() || !audioFile.isFile) return@withContext null
+
+    if (!overwriteExisting) {
+      loadExistingLyricsForTrack(track)?.let { return@withContext it }
+    }
+
+    ensureActive()
+    val backgroundThreads = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+    val transcript: SpeechTranscriptDocument? = if (speechToTextRunner != null) {
+      speechToTextRunner(audioFile, track)
+    } else {
+      val appCtx = context?.applicationContext ?: context ?: return@withContext null
+      if (audioFile.extension.equals("wav", ignoreCase = true) && audioFile.length() > 44L) {
+        FileConverterEngine.transcribeWavWithWhisper(
+          context = appCtx,
+          wavFile = audioFile,
+          defaultTitle = track.title,
+          threadsOverride = backgroundThreads,
+        ) ?: run {
+          val tempDir = appCtx.cacheDir ?: audioFile.parentFile
+          val tempWav = File.createTempFile("music_whisper_", ".wav", tempDir)
+          try {
+            if (!decodeAudioToTempWavForWhisper(audioFile, tempWav)) return@run null
+            FileConverterEngine.transcribeWavWithWhisper(
+              context = appCtx,
+              wavFile = tempWav,
+              defaultTitle = track.title,
+              threadsOverride = backgroundThreads,
+            )
+          } finally {
+            tempWav.delete()
+          }
+        }
+      } else {
+        val tempDir = appCtx.cacheDir ?: audioFile.parentFile
+        val tempWav = File.createTempFile("music_whisper_", ".wav", tempDir)
+        try {
+          if (!decodeAudioToTempWavForWhisper(audioFile, tempWav)) return@withContext null
+          ensureActive()
+          FileConverterEngine.transcribeWavWithWhisper(
+            context = appCtx,
+            wavFile = tempWav,
+            defaultTitle = track.title,
+            threadsOverride = backgroundThreads,
+          )
+        } finally {
+          tempWav.delete()
+        }
+      }
+    }
+
+    if (transcript == null) return@withContext null
+    ensureActive()
+
+    val rawCandidateSegments = transcript.segments.ifEmpty {
+      val fallbackText = transcript.rawText.trim()
+      if (fallbackText.isNotEmpty()) {
+        listOf(
+          SpeechTranscriptSegment(
+            startMs = 0L,
+            endMs = track.durationMs.coerceAtLeast(4_000L),
+            text = fallbackText,
+          )
+        )
+      } else {
+        emptyList()
+      }
+    }
+    val cleanedVocalSegments = rawCandidateSegments.mapNotNull { seg ->
+      val cleaned = cleanWhisperLyricSegmentText(seg.text)
+      if (cleaned.isEmpty()) null else seg.copy(text = cleaned)
+    }
+    val isInstrumental = cleanedVocalSegments.isEmpty()
+
+    val lrcContent = formatLyricsAsLrc(
+      track = track,
+      segments = cleanedVocalSegments,
+      isInstrumental = isInstrumental,
+    )
+    val savedFile = writeSidecarLrcAtomically(audioFile, lrcContent)
+    val parsed = parseLrcLyrics(
+      lrcContent = lrcContent,
+      trackDurationMs = track.durationMs,
+      sourceFile = savedFile,
+    )
+    synchronized(lyricsCacheLock) {
+      lyricsCacheByAudioPath[audioFile.absolutePath] = parsed
+    }
+    parsed
+  }
+
+  /**
+   * Scans [tracks] in the background:
+   * 1. Immediately loads any pre-existing `.lrc` or `.srt` sidecar files alongside audio tracks.
+   * 2. Sequentially generates missing `.lrc` sidecar files via on-device Whisper Speech-to-Text,
+   *    dynamically prioritizing the currently playing track ([prioritizeTrackSelector]) when set.
+   */
+  suspend fun indexTrackLyricsInBackground(
+    tracks: List<MusicTrack>,
+    context: Context? = null,
+    prioritizeTrackSelector: () -> String? = { null },
+    speechToTextRunner: (suspend (File, MusicTrack) -> SpeechTranscriptDocument?)? = customWhisperTranscriberForTest,
+    onProgress: (
+      indexedCount: Int,
+      totalToIndex: Int,
+      latestTrackId: String?,
+      snapshot: Map<String, MusicLyricsDocument>,
+    ) -> Unit = { _, _, _, _ -> },
+  ): Map<String, MusicLyricsDocument> = withContext(Dispatchers.IO) {
+    val resolvedByTrackId = LinkedHashMap<String, MusicLyricsDocument>()
+    val unindexedTracks = ArrayList<MusicTrack>()
+
+    for (track in tracks) {
+      ensureActive()
+      val file = track.file
+      if (track.isSampleTrack || file == null || !file.exists() || !file.isFile) continue
+      val existing = loadExistingLyricsForTrack(track)
+      if (existing != null) {
+        resolvedByTrackId[track.id] = existing
+      } else {
+        unindexedTracks.add(track)
+      }
+    }
+
+    val canRunWhisper = speechToTextRunner != null || context != null
+    if (unindexedTracks.isEmpty() || !canRunWhisper) {
+      onProgress(0, 0, null, LinkedHashMap(resolvedByTrackId))
+      return@withContext LinkedHashMap(resolvedByTrackId)
+    }
+
+    val totalToIndex = unindexedTracks.size
+    onProgress(0, totalToIndex, null, LinkedHashMap(resolvedByTrackId))
+
+    val remaining = ArrayList(unindexedTracks)
+    var completed = 0
+    while (remaining.isNotEmpty()) {
+      ensureActive()
+      val priorityId = prioritizeTrackSelector()
+      val nextIdx = if (priorityId != null) {
+        remaining.indexOfFirst { it.id == priorityId }.takeIf { it >= 0 } ?: 0
+      } else {
+        0
+      }
+      val nextTrack = remaining.removeAt(nextIdx)
+      val generated = generateSidecarLyricsForTrack(
+        track = nextTrack,
+        context = context,
+        overwriteExisting = false,
+        speechToTextRunner = speechToTextRunner,
+      )
+      if (generated != null) {
+        resolvedByTrackId[nextTrack.id] = generated
+      }
+      completed += 1
+      onProgress(completed, totalToIndex, nextTrack.id, LinkedHashMap(resolvedByTrackId))
+      yield()
+    }
+
+    LinkedHashMap(resolvedByTrackId)
   }
 
   /** Identifier of the built-in, always-present Favorites playlist. */
@@ -5412,15 +6201,21 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Filters [playlists] by matching [query] against playlist name, artist names, or track titles.
+   * Filters [playlists] by matching [query] against playlist name, artist names, track titles, or lyrics.
    */
-  fun filterPlaylists(playlists: List<MusicPlaylist>, query: String): List<MusicPlaylist> {
+  fun filterPlaylists(
+    playlists: List<MusicPlaylist>,
+    query: String,
+    lyricsMap: Map<String, MusicLyricsDocument> = emptyMap(),
+  ): List<MusicPlaylist> {
     val q = query.trim()
     if (q.isEmpty()) return playlists
     return playlists.filter { playlist ->
       playlist.name.contains(q, ignoreCase = true) ||
         playlist.artists.any { it.contains(q, ignoreCase = true) } ||
-        playlist.tracks.any { it.title.contains(q, ignoreCase = true) }
+        playlist.tracks.any {
+          it.title.contains(q, ignoreCase = true) || trackMatchesLyricsQuery(it, q, lyricsMap)
+        }
     }
   }
 
@@ -9761,6 +10556,7 @@ object MusicPlayerEngine {
     lastLaunchedPreferredMusicApp = null
     installedStreamingAppsOverrideForTest = null
     customPickerInstalledAppsOverrideForTest = null
+    customWhisperTranscriberForTest = null
     lastBroadcastMediaInfo = null
     activeMediaNotifications.clear()
     clearExternalMediaArtworkCaches()
@@ -9993,6 +10789,7 @@ class MusicPlaybackSession(
   private var progressJob: Job? = null
   private var sleepTimerJob: Job? = null
   private var libraryLoadJob: Job? = null
+  private var lyricsIndexJob: Job? = null
   private var paletteLoadJob: Job? = null
   private var mediaArtworkLoadJob: Job? = null
   internal var favoritesRecalcJob: Job? = null
@@ -11535,6 +12332,113 @@ class MusicPlaybackSession(
   var isLoadingLibrary by mutableStateOf(false)
     internal set
 
+  // Background Whisper Lyrics Indexing & Synchronized Lyrics State
+  var trackLyricsMap by mutableStateOf<Map<String, MusicLyricsDocument>>(emptyMap())
+    internal set
+
+  var isIndexingLyrics by mutableStateOf(false)
+    internal set
+
+  var lyricsIndexedCount by mutableIntStateOf(0)
+    internal set
+
+  var lyricsTotalToIndex by mutableIntStateOf(0)
+    internal set
+
+  var transcribingTrackIds by mutableStateOf<Set<String>>(emptySet())
+    internal set
+
+  /**
+   * Returns the parsed [MusicLyricsDocument] for [track] if available in memory or on disk.
+   */
+  fun getLyricsForTrack(track: MusicTrack? = currentTrack): MusicLyricsDocument? {
+    if (track == null) return null
+    trackLyricsMap[track.id]?.let { return it }
+    return MusicPlayerEngine.loadExistingLyricsForTrack(track)
+  }
+
+  /**
+   * Suspends until any active background Whisper lyrics indexing job completes.
+   */
+  suspend fun awaitLyricsIndexing() {
+    lyricsIndexJob?.join()
+  }
+
+  /**
+   * Launches background scanning of existing `.lrc`/`.srt` sidecar files and sequential on-device
+   * Whisper `.lrc` generation for local tracks in [tracksToIndex].
+   */
+  fun startBackgroundLyricsIndexing(tracksToIndex: List<MusicTrack> = allTracks) {
+    if (isInspection || isReleased) return
+    val localTracks = tracksToIndex.filter { !it.isSampleTrack && it.file != null }
+    if (localTracks.isEmpty()) {
+      lyricsIndexJob?.cancel()
+      isIndexingLyrics = false
+      lyricsIndexedCount = 0
+      lyricsTotalToIndex = 0
+      return
+    }
+    lyricsIndexJob?.cancel()
+    lyricsIndexJob = scope.launch {
+      try {
+        MusicPlayerEngine.indexTrackLyricsInBackground(
+          tracks = localTracks,
+          context = appContext,
+          prioritizeTrackSelector = { currentTrack?.id },
+          onProgress = { completed, total, _, snapshot ->
+            if (!isReleased) {
+              Snapshot.withMutableSnapshot {
+                if (snapshot.isNotEmpty() || trackLyricsMap.isNotEmpty()) {
+                  trackLyricsMap = trackLyricsMap + snapshot
+                }
+                lyricsIndexedCount = completed
+                lyricsTotalToIndex = total
+                isIndexingLyrics = total > 0 && completed < total
+              }
+            }
+          },
+        )
+      } catch (_: kotlinx.coroutines.CancellationException) {
+        throw kotlinx.coroutines.CancellationException()
+      } catch (_: Throwable) {
+        // Ignore unexpected indexing errors so playback and library browsing are unaffected
+      } finally {
+        if (!isReleased) {
+          isIndexingLyrics = false
+        }
+      }
+    }
+  }
+
+  /**
+   * Generates (or regenerates when [overwriteExisting] is `true`) `.lrc` lyrics for a single [track]
+   * on a background thread and updates [trackLyricsMap] when finished.
+   */
+  fun generateLyricsForTrackAsync(
+    track: MusicTrack,
+    overwriteExisting: Boolean = false,
+  ) {
+    if (isInspection || isReleased || track.isSampleTrack || track.file == null) return
+    if (track.id in transcribingTrackIds) return
+    transcribingTrackIds = transcribingTrackIds + track.id
+    scope.launch {
+      try {
+        val doc = MusicPlayerEngine.generateSidecarLyricsForTrack(
+          track = track,
+          context = appContext,
+          overwriteExisting = overwriteExisting,
+        )
+        if (doc != null && !isReleased) {
+          trackLyricsMap = trackLyricsMap + (track.id to doc)
+        }
+      } finally {
+        if (!isReleased) {
+          transcribingTrackIds = transcribingTrackIds - track.id
+        }
+      }
+    }
+  }
+
   var hasFullFilesPermission by mutableStateOf(
     !isInspection && appContext != null && MusicPlayerEngine.hasFullFilesPermission(appContext)
   )
@@ -11602,6 +12506,9 @@ class MusicPlaybackSession(
     prepareAndSyncMediaPlayer(forceRestart = false)
     if (isMusicFolderGranted) {
       startAsyncLibraryLoadAndArtworkPrefetch()
+      if ((initialTracks != null || appContext == null) && initialLoaded.any { !it.isSampleTrack && it.file != null }) {
+        startBackgroundLyricsIndexing(initialLoaded)
+      }
     }
   }
 
@@ -11622,6 +12529,7 @@ class MusicPlaybackSession(
       }
       val combined = (explicitTracks + extraTracks).distinctBy { it.id }
       applyLoadedLibraryTracks(combined)
+      startBackgroundLyricsIndexing(combined)
       return
     }
     if (appContext == null) {
@@ -11634,6 +12542,7 @@ class MusicPlaybackSession(
         hasFullFilesPermission = hasFullFilesPermission,
       )
       applyLoadedLibraryTracks(loaded)
+      startBackgroundLyricsIndexing(loaded)
     } else {
       startAsyncLibraryLoadAndArtworkPrefetch()
     }
@@ -11727,6 +12636,9 @@ class MusicPlaybackSession(
       }
       if (isMusicFolderGranted) {
         startAsyncLibraryLoadAndArtworkPrefetch()
+        if (initialTracks != null && reloaded.any { !it.isSampleTrack && it.file != null }) {
+          startBackgroundLyricsIndexing(reloaded)
+        }
       }
     }
   }
@@ -11852,6 +12764,7 @@ class MusicPlaybackSession(
         } catch (_: kotlinx.coroutines.CancellationException) {
           throw kotlinx.coroutines.CancellationException()
         } catch (_: Throwable) {}
+        startBackgroundLyricsIndexing(allTracks)
       }
     }
   }
@@ -12321,7 +13234,9 @@ class MusicPlaybackSession(
   fun duplicateTrack(track: MusicTrack, context: Context? = appContext): MusicTrack {
     val resolvedFile = resolveTrackFile(track, context)
     val dupFile = if (resolvedFile != null && resolvedFile.exists()) {
-      FileManagerEngine.duplicateFile(resolvedFile).getOrNull()
+      FileManagerEngine.duplicateFile(resolvedFile).getOrNull()?.also { createdDup ->
+        MusicPlayerEngine.duplicateSidecarLyricsFiles(resolvedFile, createdDup)
+      }
     } else {
       null
     }
@@ -12335,6 +13250,11 @@ class MusicPlaybackSession(
       title = newTitle,
       file = dupFile ?: track.file,
     )
+    if (dupFile != null) {
+      MusicPlayerEngine.loadExistingLyricsForTrack(duplicatedTrack)?.let { dupLyrics ->
+        trackLyricsMap = trackLyricsMap + (duplicatedTrack.id to dupLyrics)
+      }
+    }
     val idx = allTracks.indexOfFirst { it.id == track.id }
     val updatedAll = allTracks.toMutableList()
     if (idx >= 0) {
@@ -12435,6 +13355,9 @@ class MusicPlaybackSession(
       val renameResult = FileManagerEngine.renameFile(existingFile, targetFileName)
       if (renameResult.isSuccess) {
         renamedFile = renameResult.getOrNull()
+        if (renamedFile != null) {
+          MusicPlayerEngine.renameSidecarLyricsFiles(existingFile, renamedFile)
+        }
       }
     }
     val newTitle = if (renamedFile != null && trimmed.contains(".")) {
@@ -12447,6 +13370,11 @@ class MusicPlaybackSession(
       title = newTitle,
       file = renamedFile,
     )
+    if (track.id in trackLyricsMap || renamedFile != null) {
+      val updatedLyrics = MusicPlayerEngine.loadExistingLyricsForTrack(updatedTrack) ?: trackLyricsMap[track.id]
+      val nextLyricsMap = trackLyricsMap - track.id
+      trackLyricsMap = if (updatedLyrics != null) nextLyricsMap + (updatedTrack.id to updatedLyrics) else nextLyricsMap
+    }
     allTracks = allTracks.map { if (it.id == track.id) updatedTrack else it }
     unshuffledQueue = unshuffledQueue.map { if (it.id == track.id) updatedTrack else it }
     playbackQueue = playbackQueue.map { if (it.id == track.id) updatedTrack else it }
@@ -12638,10 +13566,14 @@ class MusicPlaybackSession(
     val idsToDelete = tracksToDelete.map { it.id }.toSet()
     tracksToDelete.forEach { track ->
       track.file?.let { file ->
+        MusicPlayerEngine.deleteSidecarLyricsFiles(file)
         if (file.exists()) {
           FileManagerEngine.deleteFileOrDirectory(file)
         }
       }
+    }
+    if (trackLyricsMap.keys.any { it in idsToDelete }) {
+      trackLyricsMap = trackLyricsMap - idsToDelete
     }
     val wasCurrentDeleted = currentTrack?.id in idsToDelete
     val oldQueueIdx = currentQueueIndex
@@ -13546,6 +14478,7 @@ class MusicPlaybackSession(
     progressJob?.cancel()
     sleepTimerJob?.cancel()
     libraryLoadJob?.cancel()
+    lyricsIndexJob?.cancel()
     paletteLoadJob?.cancel()
     mediaArtworkLoadJob?.cancel()
     favoritesRecalcJob?.cancel()

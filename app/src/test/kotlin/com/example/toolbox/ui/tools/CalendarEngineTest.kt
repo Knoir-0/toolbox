@@ -430,4 +430,167 @@ class CalendarEngineTest {
     val updatedEvent = repo.loadEvents().first()
     assertEquals(secondTrigger, updatedEvent.triggerAlarmAtMillis(nowMillis = firstTrigger + 1_000L))
   }
+
+  @Test
+  fun deviceCalendarUtcAllDayAndRruleHelpers_roundTripWithoutTimezoneDayShift() {
+    val targetDay = CalendarDay(2026, 11, 27)
+    val multiEndDay = CalendarDay(2026, 11, 29)
+
+    // Single-day UTC midnight [2026-11-27T00:00Z, 2026-11-28T00:00Z) -> stays Nov 27 in local time
+    val (singleUtcStart, singleUtcEnd) = CalendarEngine.localAllDayToUtcRangeMillis(targetDay)
+    assertEquals(86_400_000L, singleUtcEnd - singleUtcStart)
+    val (localStart, localEnd) = CalendarEngine.utcAllDayRangeToLocalMillis(singleUtcStart, singleUtcEnd)
+    assertEquals(targetDay, CalendarDay.fromMillis(localStart))
+    assertEquals(targetDay, CalendarDay.fromMillis(localEnd))
+    assertEquals("P1D", CalendarEngine.formatRfc5545Duration(localStart, localEnd, isAllDay = true))
+
+    // Multi-day all-day [2026-11-27 .. 2026-11-29] (3 days -> P3D)
+    val (multiUtcStart, multiUtcEnd) = CalendarEngine.localAllDayToUtcRangeMillis(targetDay, multiEndDay)
+    val (multiLocalStart, multiLocalEnd) = CalendarEngine.utcAllDayRangeToLocalMillis(multiUtcStart, multiUtcEnd)
+    assertEquals(targetDay, CalendarDay.fromMillis(multiLocalStart))
+    assertEquals(multiEndDay, CalendarDay.fromMillis(multiLocalEnd - 1L))
+    assertEquals("P3D", CalendarEngine.formatRfc5545Duration(multiLocalStart, multiLocalEnd, isAllDay = true))
+
+    // Timed RFC 5545 duration (90 minutes -> PT5400S)
+    assertEquals(
+      "PT5400S",
+      CalendarEngine.formatRfc5545Duration(
+        targetDay.withTime(10, 0),
+        targetDay.withTime(11, 30),
+        isAllDay = false,
+      ),
+    )
+
+    // RRULE round-trip for all recurrence rules
+    CalendarRecurrence.entries.forEach { rec ->
+      val rrule = CalendarEngine.toRruleString(rec)
+      assertEquals(rec, CalendarEngine.fromRruleString(rrule))
+    }
+  }
+
+  @Test
+  fun deviceCalendarPickerFilter_andPreExpandedInstances_filterIndependentlyAndAvoidDuplicateExpansion() {
+    val calPersonal = DeviceCalendarInfo(
+      id = 10L,
+      displayName = "alex@gmail.com",
+      accountName = "alex@gmail.com",
+      colorArgb = 0xFF039BE5.toInt(),
+      isVisible = true,
+      isPrimary = true,
+      accessLevel = android.provider.CalendarContract.Calendars.CAL_ACCESS_OWNER,
+    )
+    val calWork = DeviceCalendarInfo(
+      id = 20L,
+      displayName = "Engineering Team",
+      accountName = "alex@company.com",
+      colorArgb = 0xFF3F51B5.toInt(),
+      isVisible = true,
+      isPrimary = false,
+      accessLevel = android.provider.CalendarContract.Calendars.CAL_ACCESS_EDITOR,
+    )
+    val calReadOnly = DeviceCalendarInfo(
+      id = 30L,
+      displayName = "Public Holidays",
+      accountName = "holidays@group.v.calendar.google.com",
+      colorArgb = 0xFF0B8043.toInt(),
+      isVisible = false,
+      isPrimary = false,
+      accessLevel = android.provider.CalendarContract.Calendars.CAL_ACCESS_READ,
+    )
+    val calendars = listOf(calPersonal, calWork, calReadOnly)
+
+    assertTrue(calPersonal.isWritable)
+    assertTrue(calWork.isWritable)
+    assertFalse(calReadOnly.isWritable)
+    assertEquals(CalendarEventColor.PEACOCK, calPersonal.closestSwatch)
+    assertEquals(CalendarEventColor.BLUEBERRY, calWork.closestSwatch)
+    assertEquals(CalendarEventColor.BASIL, calReadOnly.closestSwatch)
+
+    // Default active IDs pick system-visible calendars (10L, 20L)
+    val defaultEnabled = CalendarEngine.resolveActiveDeviceCalendarIds(calendars, storedEnabledIds = null)
+    assertEquals(setOf(10L, 20L), defaultEnabled)
+
+    // Explicit picker selection overrides system visibility
+    val customEnabled = CalendarEngine.resolveActiveDeviceCalendarIds(calendars, storedEnabledIds = setOf(20L, 30L))
+    assertEquals(setOf(20L, 30L), customEnabled)
+
+    // Default target resolution respects primary writable calendar & TARGET_CALENDAR_LOCAL_ID override
+    val writable = calendars.filter { it.isWritable }
+    assertEquals(
+      10L,
+      CalendarEngine.resolveDefaultTargetDeviceCalendarId(
+        preferredId = null,
+        writableCalendars = writable,
+        enabledDeviceCalendarIds = defaultEnabled,
+        syncEnabled = true,
+      ),
+    )
+    assertNull(
+      CalendarEngine.resolveDefaultTargetDeviceCalendarId(
+        preferredId = TARGET_CALENDAR_LOCAL_ID,
+        writableCalendars = writable,
+        enabledDeviceCalendarIds = defaultEnabled,
+        syncEnabled = true,
+      ),
+    )
+
+    // Pre-expanded recurring instances from CalendarContract.Instances must NOT double-expand onto later days
+    val day1 = CalendarDay(2026, 11, 23)
+    val day2 = CalendarDay(2026, 11, 24)
+    val inst1 = CalendarEvent(
+      id = "device_cal_20_ev_99_${day1.withTime(9, 0)}",
+      title = "Eng Standup",
+      startMillis = day1.withTime(9, 0),
+      endMillis = day1.withTime(9, 30),
+      category = CalendarCategory.WORK,
+      color = CalendarEventColor.BLUEBERRY,
+      recurrence = CalendarRecurrence.DAILY,
+      deviceCalendarId = 20L,
+      deviceEventId = 99L,
+      deviceCalendarName = "Engineering Team",
+      deviceAccountName = "alex@company.com",
+      isPreExpandedInstance = true,
+    )
+    val inst2 = inst1.copy(
+      id = "device_cal_20_ev_99_${day2.withTime(9, 0)}",
+      startMillis = day2.withTime(9, 0),
+      endMillis = day2.withTime(9, 30),
+    )
+    val allInstances = listOf(inst1, inst2)
+
+    // Even when all local Toolbox categories are unchecked (emptySet()), enabled device calendar 20L still renders!
+    val day2Occs = CalendarEngine.occurrencesForDay(
+      events = allInstances,
+      day = day2,
+      enabledCategories = emptySet(),
+      enabledDeviceCalendarIds = setOf(20L),
+    )
+    assertEquals(1, day2Occs.size)
+    assertEquals(inst2.id, day2Occs.first().event.id)
+
+    // Unchecking calendar 20L hides its occurrences
+    val hiddenOccs = CalendarEngine.occurrencesForDay(
+      events = allInstances,
+      day = day2,
+      enabledCategories = CalendarCategory.entries.toSet(),
+      enabledDeviceCalendarIds = setOf(10L),
+    )
+    assertTrue(hiddenOccs.isEmpty())
+
+    // Search deduplicates recurring device instances & filters by deviceCalendarIdFilter
+    val searchMatches = CalendarEngine.searchEvents(
+      events = allInstances,
+      query = "Engineering",
+      deviceCalendarIdFilter = 20L,
+    )
+    assertEquals(1, searchMatches.size)
+    assertEquals("Eng Standup", searchMatches.first().title)
+
+    // Widget favorite toggle supports device calendar instance IDs
+    val repo = InMemoryCalendarRepository()
+    assertTrue(CalendarWidgets.toggleEventFavoriteFromWidget(null, inst1.id, repo))
+    assertTrue("device_ev_20_99" in repo.getFavoriteEventKeys())
+    assertTrue(CalendarWidgets.toggleEventFavoriteFromWidget(null, inst2.id, repo))
+    assertFalse("device_ev_20_99" in repo.getFavoriteEventKeys())
+  }
 }

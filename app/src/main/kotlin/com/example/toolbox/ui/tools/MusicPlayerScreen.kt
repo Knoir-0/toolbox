@@ -127,6 +127,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
@@ -595,6 +596,11 @@ fun MusicPlayerScreen(
 
   val allTracks = session.allTracks
   val sortedLibraryTracks = session.sortedLibraryTracks
+  val trackLyricsMap = session.trackLyricsMap
+  val isIndexingLyrics = session.isIndexingLyrics
+  val lyricsIndexedCount = session.lyricsIndexedCount
+  val lyricsTotalToIndex = session.lyricsTotalToIndex
+  val transcribingTrackIds = session.transcribingTrackIds
   val hasDrillDown = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
 
   val songsSearchQuery = if (!hasDrillDown && (selectedCustomFolder != null || selectedTab == MusicLibraryTab.SONGS)) searchQuery else ""
@@ -604,13 +610,14 @@ fun MusicPlayerScreen(
     showFavoriteSongsOnly,
     activeFavoriteSongIdsForFilter,
     songsSearchQuery,
+    trackLyricsMap,
   ) {
     val base = if (showFavoriteSongsOnly) {
       sortedLibraryTracks.filter { it.id in activeFavoriteSongIdsForFilter }
     } else {
       sortedLibraryTracks
     }
-    MusicPlayerEngine.filterTracks(base, songsSearchQuery)
+    MusicPlayerEngine.filterTracks(base, songsSearchQuery, trackLyricsMap)
   }
 
   val customFolderTracks = remember(
@@ -619,6 +626,7 @@ fun MusicPlayerScreen(
     showFavoriteSongsOnly,
     activeFavoriteSongIdsForFilter,
     songsSearchQuery,
+    trackLyricsMap,
   ) {
     val folder = selectedCustomFolder
     if (folder == null) {
@@ -632,7 +640,7 @@ fun MusicPlayerScreen(
       } else {
         inFolder
       }
-      MusicPlayerEngine.filterTracks(base, songsSearchQuery)
+      MusicPlayerEngine.filterTracks(base, songsSearchQuery, trackLyricsMap)
     }
   }
 
@@ -644,6 +652,7 @@ fun MusicPlayerScreen(
     showFavoriteArtistsOnly,
     activeFavoriteArtistsForFilter,
     artistsSearchQuery,
+    trackLyricsMap,
     sortOrder,
     viewPlayStats,
     randomSortSeed,
@@ -653,7 +662,7 @@ fun MusicPlayerScreen(
     } else {
       baseArtists
     }
-    val filtered = MusicPlayerEngine.filterArtists(base, artistsSearchQuery)
+    val filtered = MusicPlayerEngine.filterArtists(base, artistsSearchQuery, trackLyricsMap)
     MusicPlayerEngine.sortArtists(
       artists = filtered,
       sortOrder = sortOrder,
@@ -670,6 +679,7 @@ fun MusicPlayerScreen(
     showFavoriteAlbumsOnly,
     activeFavoriteAlbumsForFilter,
     albumsSearchQuery,
+    trackLyricsMap,
     sortOrder,
     viewPlayStats,
     randomSortSeed,
@@ -679,7 +689,7 @@ fun MusicPlayerScreen(
     } else {
       baseAlbums
     }
-    val filtered = MusicPlayerEngine.filterAlbums(base, albumsSearchQuery)
+    val filtered = MusicPlayerEngine.filterAlbums(base, albumsSearchQuery, trackLyricsMap)
     MusicPlayerEngine.sortAlbums(
       albums = filtered,
       sortOrder = sortOrder,
@@ -696,6 +706,7 @@ fun MusicPlayerScreen(
     showFavoriteGenresOnly,
     activeFavoriteGenresForFilter,
     genresSearchQuery,
+    trackLyricsMap,
     sortOrder,
     viewPlayStats,
     randomSortSeed,
@@ -705,7 +716,7 @@ fun MusicPlayerScreen(
     } else {
       baseGenres
     }
-    val filtered = MusicPlayerEngine.filterGenres(base, genresSearchQuery)
+    val filtered = MusicPlayerEngine.filterGenres(base, genresSearchQuery, trackLyricsMap)
     MusicPlayerEngine.sortGenres(
       genres = filtered,
       sortOrder = sortOrder,
@@ -719,11 +730,12 @@ fun MusicPlayerScreen(
   val allPlaylists = remember(
     basePlaylists,
     playlistsSearchQuery,
+    trackLyricsMap,
     sortOrder,
     viewPlayStats,
     randomSortSeed,
   ) {
-    val filtered = MusicPlayerEngine.filterPlaylists(basePlaylists, playlistsSearchQuery)
+    val filtered = MusicPlayerEngine.filterPlaylists(basePlaylists, playlistsSearchQuery, trackLyricsMap)
     if (sortOrder == MusicSortOrder.TITLE_ASC) {
       // Preserve built-in playlists (Favorites, Most Played, Recently Played) at top on default TITLE_ASC sort
       filtered
@@ -743,11 +755,12 @@ fun MusicPlayerScreen(
   val allHomePlaylists = remember(
     baseHomePlaylists,
     homeSearchQuery,
+    trackLyricsMap,
     sortOrder,
     homePlayStats,
     randomSortSeed,
   ) {
-    val filtered = MusicPlayerEngine.filterPlaylists(baseHomePlaylists, homeSearchQuery)
+    val filtered = MusicPlayerEngine.filterPlaylists(baseHomePlaylists, homeSearchQuery, trackLyricsMap)
     MusicPlayerEngine.sortPlaylists(
       playlists = filtered,
       sortOrder = sortOrder,
@@ -1322,8 +1335,8 @@ fun MusicPlayerScreen(
             artist
           } else {
             artist.copy(
-              albums = MusicPlayerEngine.filterAlbums(artist.albums, searchQuery),
-              tracks = MusicPlayerEngine.filterTracks(artist.tracks, searchQuery),
+              albums = MusicPlayerEngine.filterAlbums(artist.albums, searchQuery, trackLyricsMap),
+              tracks = MusicPlayerEngine.filterTracks(artist.tracks, searchQuery, trackLyricsMap),
             )
           }
         }
@@ -1334,7 +1347,7 @@ fun MusicPlayerScreen(
             album
           } else {
             album.copy(
-              tracks = MusicPlayerEngine.filterTracks(album.tracks, searchQuery),
+              tracks = MusicPlayerEngine.filterTracks(album.tracks, searchQuery, trackLyricsMap),
             )
           }
         }
@@ -1345,7 +1358,7 @@ fun MusicPlayerScreen(
             genre
           } else {
             genre.copy(
-              tracks = MusicPlayerEngine.filterTracks(genre.tracks, searchQuery),
+              tracks = MusicPlayerEngine.filterTracks(genre.tracks, searchQuery, trackLyricsMap),
             )
           }
         }
@@ -1356,7 +1369,7 @@ fun MusicPlayerScreen(
             playlist
           } else {
             playlist.copy(
-              tracks = MusicPlayerEngine.filterTracks(playlist.tracks, searchQuery),
+              tracks = MusicPlayerEngine.filterTracks(playlist.tracks, searchQuery, trackLyricsMap),
             )
           }
         }
@@ -1370,14 +1383,19 @@ fun MusicPlayerScreen(
         selectedCustomFolder != null -> selectedCustomFolder.pillLabel
         else -> "Music"
       }
+      val lyricsIndexingSuffix = if (isIndexingLyrics && lyricsTotalToIndex > 0) {
+        " • Indexing lyrics ($lyricsIndexedCount/$lyricsTotalToIndex)…"
+      } else {
+        ""
+      }
       val headerSubtext = when {
         activeAlbum != null -> "${activeAlbum.artist} • ${activeAlbum.songCount} songs • ${activeAlbum.totalDurationFormatted}"
         activeArtist != null -> "${activeArtist.albumCount} albums • ${activeArtist.songCount} songs"
         activeGenre != null -> "${activeGenre.songCount} songs • ${activeGenre.artistCount} artists"
         activePlaylist != null -> activePlaylist.summaryText
-        selectedCustomFolder != null -> "${selectedCustomFolder.folderPath} • ${customFolderTracks.size} songs"
+        selectedCustomFolder != null -> "${selectedCustomFolder.folderPath} • ${customFolderTracks.size} songs$lyricsIndexingSuffix"
         !isMusicFolderGranted -> "Storage access locked • Grant access to /Music"
-        else -> "${baseArtists.size} artists • ${baseAlbums.size} albums • ${allTracks.size} songs"
+        else -> "${baseArtists.size} artists • ${baseAlbums.size} albums • ${allTracks.size} songs$lyricsIndexingSuffix"
       }
       val searchPlaceholder = when {
         activeAlbum != null -> "Search in ${activeAlbum.name}..."
@@ -1704,29 +1722,11 @@ fun MusicPlayerScreen(
         if (customIdx >= 0) tabOrder.size + customIdx else tabOrder.indexOf(selectedTab)
       }
 
-      // 3. Main Content Area (Scoped Storage Locked/Permission View, Drill-down, Custom Folder, or Selected Tab in List/Card View)
+      // 3. Main Content Area (Scoped Storage Locked/Permission View, Drill-down, or Horizontally Paginated Library Tabs & Custom Folders)
       Box(
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
-          .swipeToSwitchPillView(
-            items = musicPillIndices,
-            selectedItem = activeMusicPillIndex,
-            enabled = isMusicFolderGranted && !isSelectionMode && !hasDrillDown,
-            onSelectItem = { targetIdx ->
-              clearSelection()
-              clearDrillDown()
-              if (targetIdx in tabOrder.indices) {
-                updateTab(tabOrder[targetIdx])
-              } else {
-                val folder = customFolders.getOrNull(targetIdx - tabOrder.size)
-                if (folder != null) {
-                  session.selectCustomFolder(folder)
-                  sectionFocusVersion++
-                }
-              }
-            },
-          )
           .pinchToChangeColumns(
             enabled = isMusicFolderGranted,
             isListView = viewMode == MusicViewMode.LIST,
@@ -1878,43 +1878,87 @@ fun MusicPlayerScreen(
             )
           }
 
-          selectedCustomFolder != null -> {
-            val groupedCustomTracks = remember(customFolderTracks, groupOption) {
-              MusicPlayerEngine.groupTracks(customFolderTracks, groupOption).flatMap { it.tracks }
-            }
-            SongsTabContent(
-              tracks = customFolderTracks,
-              groupOption = groupOption,
-              viewMode = viewMode,
-              cardsPerRow = cardsPerRow,
-              currentTrackId = currentTrack?.id,
-              isPlaying = isPlaying,
-              favoriteIds = favoriteIds,
-              showFavoritesOnly = showFavoriteSongsOnly,
-              sectionFocusVersion = sectionFocusVersion,
-              onToggleFavoritesOnly = {
-                showFavoriteSongsOnly = !showFavoriteSongsOnly
-                sectionFocusVersion++
-              },
-              onPlayAll = {
-                if (groupedCustomTracks.isNotEmpty()) {
-                  playTrackInContext(groupedCustomTracks.first(), groupedCustomTracks)
-                }
-              },
-              onShuffleAll = {
-                if (groupedCustomTracks.isNotEmpty()) {
-                  playShuffledContext(groupedCustomTracks)
-                }
-              },
-              onSelectTrack = { track ->
-                playTrackInContext(track, groupedCustomTracks)
-              },
-              onToggleFavorite = { toggleFavorite(it.id) },
-            )
-          }
-
           else -> {
-            when (selectedTab) {
+            ToolboxPillHorizontalPager(
+              items = musicPillIndices,
+              selectedItem = activeMusicPillIndex,
+              enabled = !isSelectionMode,
+              key = { _, idx ->
+                if (idx in tabOrder.indices) {
+                  "tab_${tabOrder[idx].name}"
+                } else {
+                  val folder = customFolders.getOrNull(idx - tabOrder.size)
+                  "folder_${folder?.folderPath ?: idx}"
+                }
+              },
+              onSelectItem = { targetIdx ->
+                clearSelection()
+                clearDrillDown()
+                if (targetIdx in tabOrder.indices) {
+                  updateTab(tabOrder[targetIdx])
+                } else {
+                  val folder = customFolders.getOrNull(targetIdx - tabOrder.size)
+                  if (folder != null) {
+                    session.selectCustomFolder(folder)
+                    sectionFocusVersion++
+                  }
+                }
+              },
+              modifier = Modifier.fillMaxSize(),
+            ) { pagePillIndex ->
+              if (pagePillIndex !in tabOrder.indices) {
+                val pageFolder = customFolders.getOrNull(pagePillIndex - tabOrder.size)
+                val pageFolderTracks = remember(pageFolder, sortedLibraryTracks, songsSearchQuery, showFavoriteSongsOnly, activeFavoriteSongIdsForFilter, trackLyricsMap) {
+                  if (pageFolder == null) {
+                    emptyList()
+                  } else if (pageFolder.folderPath.equals(selectedCustomFolderPath, ignoreCase = true)) {
+                    customFolderTracks
+                  } else {
+                    val inFolder = sortedLibraryTracks.filter { track ->
+                      MusicPlayerEngine.isTrackInFolder(track, pageFolder)
+                    }
+                    val base = if (showFavoriteSongsOnly) {
+                      inFolder.filter { it.id in activeFavoriteSongIdsForFilter }
+                    } else {
+                      inFolder
+                    }
+                    MusicPlayerEngine.filterTracks(base, songsSearchQuery, trackLyricsMap)
+                  }
+                }
+                val groupedCustomTracks = remember(pageFolderTracks, groupOption) {
+                  MusicPlayerEngine.groupTracks(pageFolderTracks, groupOption).flatMap { it.tracks }
+                }
+                SongsTabContent(
+                  tracks = pageFolderTracks,
+                  groupOption = groupOption,
+                  viewMode = viewMode,
+                  cardsPerRow = cardsPerRow,
+                  currentTrackId = currentTrack?.id,
+                  isPlaying = isPlaying,
+                  favoriteIds = favoriteIds,
+                  showFavoritesOnly = showFavoriteSongsOnly,
+                  sectionFocusVersion = sectionFocusVersion,
+                  onToggleFavoritesOnly = {
+                    showFavoriteSongsOnly = !showFavoriteSongsOnly
+                    sectionFocusVersion++
+                  },
+                  onPlayAll = {
+                    if (groupedCustomTracks.isNotEmpty()) {
+                      playTrackInContext(groupedCustomTracks.first(), groupedCustomTracks)
+                    }
+                  },
+                  onShuffleAll = {
+                    if (groupedCustomTracks.isNotEmpty()) {
+                      playShuffledContext(groupedCustomTracks)
+                    }
+                  },
+                  onSelectTrack = { track ->
+                    playTrackInContext(track, groupedCustomTracks)
+                  },
+                  onToggleFavorite = { toggleFavorite(it.id) },
+                )
+              } else {
+                when (tabOrder[pagePillIndex]) {
               MusicLibraryTab.HOME -> {
                 HomeTabContent(
                   playlists = allHomePlaylists,
@@ -2210,6 +2254,8 @@ fun MusicPlayerScreen(
                   },
                 )
               }
+                }
+              }
             }
           }
         }
@@ -2292,6 +2338,14 @@ fun MusicPlayerScreen(
           0f
         }
 
+        val activeTrackLyrics = remember(effectiveTrack.id, trackLyricsMap, ext) {
+          if (ext != null) null else trackLyricsMap[effectiveTrack.id] ?: session.getLyricsForTrack(effectiveTrack)
+        }
+        val isTranscribingActiveTrack = ext == null && (
+          effectiveTrack.id in transcribingTrackIds ||
+            (isIndexingLyrics && activeTrackLyrics == null && !effectiveTrack.isSampleTrack && effectiveTrack.file != null)
+          )
+
         ExpandedMusicPlayerOverlay(
           track = effectiveTrack,
           externalMedia = ext,
@@ -2308,6 +2362,8 @@ fun MusicPlayerScreen(
           queue = playbackQueue,
           currentQueueIndex = currentQueueIndex,
           initialQueueSheetValue = if (session.initialQueueExpandedState) SheetValue.Expanded else SheetValue.PartiallyExpanded,
+          currentTrackLyrics = activeTrackLyrics,
+          isTranscribingLyrics = isTranscribingActiveTrack,
           dominantColor = animatedDominant,
           secondaryColor = animatedSecondary,
           accentColor = animatedAccent,
@@ -2339,6 +2395,18 @@ fun MusicPlayerScreen(
               MusicPlayerEngine.seekExternalSystemMediaTo(targetMs, context)
             } else {
               session.finishSeekDrag()
+            }
+          },
+          onSeekToLyricMs = { targetMs ->
+            if (ext == null) {
+              session.seekToPositionMs(targetMs)
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+          },
+          onGenerateLyrics = { overwrite ->
+            if (ext == null && currentTrack != null) {
+              session.generateLyricsForTrackAsync(currentTrack, overwriteExisting = overwrite)
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             }
           },
           onToggleShuffle = { cycleShuffleMode() },
@@ -2471,10 +2539,14 @@ fun MusicPlayerScreen(
           detailPalette = MusicPlayerEngine.loadTrackPaletteAsync(detailTrack, sizePx = 360)
         }
       }
+      val detailLyrics = remember(detailTrack.id, trackLyricsMap) {
+        trackLyricsMap[detailTrack.id] ?: session.getLyricsForTrack(detailTrack)
+      }
       TrackDetailsDialog(
         track = detailTrack,
         palette = detailPalette,
         playStat = session.playStats[detailTrack.id] ?: TrackPlayStats(),
+        lyrics = detailLyrics,
         onSelectColor = { hex ->
           showTrackInfoDialog = false
           trackForDetailsDialog = null
@@ -8887,6 +8959,8 @@ private fun ExpandedMusicPlayerOverlay(
   queue: List<MusicTrack>,
   currentQueueIndex: Int,
   initialQueueSheetValue: SheetValue = SheetValue.PartiallyExpanded,
+  currentTrackLyrics: MusicLyricsDocument? = null,
+  isTranscribingLyrics: Boolean = false,
   dominantColor: Color,
   secondaryColor: Color,
   accentColor: Color,
@@ -8897,6 +8971,8 @@ private fun ExpandedMusicPlayerOverlay(
   onToggleFavorite: () -> Unit,
   onSeekChange: (Float) -> Unit,
   onSeekFinished: () -> Unit,
+  onSeekToLyricMs: (Long) -> Unit = {},
+  onGenerateLyrics: (Boolean) -> Unit = {},
   onToggleShuffle: () -> Unit,
   onPrevious: () -> Unit,
   onPlayPause: () -> Unit,
@@ -8935,6 +9011,7 @@ private fun ExpandedMusicPlayerOverlay(
   var queueOpenCount by remember {
     mutableIntStateOf(if (initialQueueSheetValue == SheetValue.Expanded) 1 else 0)
   }
+  var isLyricsVisible by rememberSaveable { mutableStateOf(false) }
 
   fun animateQueueTo(expanded: Boolean) {
     if (isExternal) return
@@ -8959,6 +9036,10 @@ private fun ExpandedMusicPlayerOverlay(
 
   BackHandler(enabled = isQueueExpanded) {
     animateQueueTo(false)
+  }
+
+  BackHandler(enabled = !isExternal && isLyricsVisible && !isQueueExpanded) {
+    isLyricsVisible = false
   }
 
   val topGradientColor = lerp(dominantColor, Color(0xFF12121A), 0.25f)
@@ -9142,41 +9223,55 @@ private fun ExpandedMusicPlayerOverlay(
             },
           contentAlignment = Alignment.Center,
         ) {
-          Card(
-            shape = RoundedCornerShape(24.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.25f)),
-            modifier = Modifier
-              .aspectRatio(1f)
-              .fillMaxSize()
-              .scale(artworkScale)
-              .testTag("expanded_player_album_art"),
-          ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-              TrackArtworkBanner(
-                track = track,
-                overrideBitmap = externalMedia?.artworkBitmap,
-                overridePalette = externalMedia?.palette,
-                modifier = Modifier.fillMaxSize(),
-              )
-              if (!isExternal) {
-                IconButton(
-                  onClick = onToggleFavorite,
-                  colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = ArtworkOverlayButtonBackground,
-                  ),
-                  modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(8.dp)
-                    .size(30.dp)
-                    .testTag("expanded_player_favorite_button"),
-                ) {
-                  Icon(
-                    imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
-                    tint = if (isFavorite) accentColor else Color.White,
-                    modifier = Modifier.size(16.dp),
-                  )
+          if (!isExternal && isLyricsVisible) {
+            ExpandedPlayerSyncedLyricsCard(
+              track = track,
+              lyrics = currentTrackLyrics,
+              currentPositionMs = currentPositionMs,
+              isTranscribing = isTranscribingLyrics,
+              isFavorite = isFavorite,
+              accentColor = accentColor,
+              onToggleFavorite = onToggleFavorite,
+              onSeekToLyricMs = onSeekToLyricMs,
+              onGenerateLyrics = onGenerateLyrics,
+            )
+          } else {
+            Card(
+              shape = RoundedCornerShape(24.dp),
+              elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+              border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.25f)),
+              modifier = Modifier
+                .aspectRatio(1f)
+                .fillMaxSize()
+                .scale(artworkScale)
+                .testTag("expanded_player_album_art"),
+            ) {
+              Box(modifier = Modifier.fillMaxSize()) {
+                TrackArtworkBanner(
+                  track = track,
+                  overrideBitmap = externalMedia?.artworkBitmap,
+                  overridePalette = externalMedia?.palette,
+                  modifier = Modifier.fillMaxSize(),
+                )
+                if (!isExternal) {
+                  IconButton(
+                    onClick = onToggleFavorite,
+                    colors = IconButtonDefaults.iconButtonColors(
+                      containerColor = ArtworkOverlayButtonBackground,
+                    ),
+                    modifier = Modifier
+                      .align(Alignment.BottomEnd)
+                      .padding(8.dp)
+                      .size(30.dp)
+                      .testTag("expanded_player_favorite_button"),
+                  ) {
+                    Icon(
+                      imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                      contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
+                      tint = if (isFavorite) accentColor else Color.White,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  }
                 }
               }
             }
@@ -9592,6 +9687,42 @@ private fun ExpandedMusicPlayerOverlay(
                   )
                 }
               }
+
+              val hasAvailableLyrics = currentTrackLyrics?.hasLyrics == true
+              Surface(
+                shape = CircleShape,
+                color = if (isLyricsVisible) accentColor.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.14f),
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable {
+                    val nextVisible = !isLyricsVisible
+                    isLyricsVisible = nextVisible
+                    if (nextVisible && isQueueExpanded) {
+                      animateQueueTo(false)
+                    }
+                  }
+                  .semantics { selected = isLyricsVisible }
+                  .testTag("expanded_player_lyrics_button"),
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Lyrics,
+                    contentDescription = null,
+                    tint = if (isLyricsVisible || hasAvailableLyrics) accentColor else Color.White,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Text(
+                    text = "Lyrics",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                  )
+                }
+              }
             }
           } else {
             Row(
@@ -9834,6 +9965,312 @@ private fun ExpandedMusicPlayerOverlay(
             onMoveQueueItem = onMoveQueueItem,
             onSaveQueueAsPlaylist = onSaveQueueAsPlaylist,
           )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ExpandedPlayerSyncedLyricsCard(
+  track: MusicTrack,
+  lyrics: MusicLyricsDocument?,
+  currentPositionMs: Long,
+  isTranscribing: Boolean,
+  isFavorite: Boolean,
+  accentColor: Color,
+  onToggleFavorite: () -> Unit,
+  onSeekToLyricMs: (Long) -> Unit,
+  onGenerateLyrics: (Boolean) -> Unit,
+) {
+  val activeLineIndex = remember(lyrics, currentPositionMs) {
+    if (lyrics != null && lyrics.hasLyrics) {
+      MusicPlayerEngine.resolveActiveLyricLineIndex(lyrics.lines, currentPositionMs)
+    } else {
+      -1
+    }
+  }
+  val lyricsListState = rememberLazyListState()
+
+  LaunchedEffect(track.id, activeLineIndex) {
+    if (lyrics != null && lyrics.hasLyrics && activeLineIndex in lyrics.lines.indices) {
+      val scrollTarget = (activeLineIndex - 1).coerceAtLeast(0)
+      lyricsListState.animateScrollToItem(scrollTarget)
+    }
+  }
+
+  Card(
+    shape = RoundedCornerShape(24.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = Color.Black.copy(alpha = 0.28f),
+    ),
+    border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.22f)),
+    modifier = Modifier
+      .fillMaxSize()
+      .testTag("expanded_player_lyrics_panel"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(14.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Surface(
+          shape = CircleShape,
+          color = Color.White.copy(alpha = 0.14f),
+        ) {
+          val badgeLabel = when {
+            isTranscribing -> "Whisper STT • Indexing…"
+            lyrics != null && lyrics.isInstrumental -> "${lyrics.sourceFormat} • Instrumental"
+            lyrics != null && lyrics.lines.isNotEmpty() -> {
+              val lineCount = lyrics.lines.size
+              val countText = if (lineCount == 1) "1 line" else "$lineCount lines"
+              "${lyrics.sourceFormat} • $countText"
+            }
+            else -> "Synced Lyrics"
+          }
+          Text(
+            text = badgeLabel,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White.copy(alpha = 0.9f),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+          )
+        }
+
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          if (!track.isSampleTrack && track.file != null && !isTranscribing && lyrics != null) {
+            IconButton(
+              onClick = { onGenerateLyrics(true) },
+              colors = IconButtonDefaults.iconButtonColors(
+                containerColor = ArtworkOverlayButtonBackground,
+              ),
+              modifier = Modifier
+                .size(30.dp)
+                .testTag("expanded_player_regenerate_lyrics_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = "Regenerate lyrics with Whisper",
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(16.dp),
+              )
+            }
+          }
+
+          IconButton(
+            onClick = onToggleFavorite,
+            colors = IconButtonDefaults.iconButtonColors(
+              containerColor = ArtworkOverlayButtonBackground,
+            ),
+            modifier = Modifier
+              .size(30.dp)
+              .testTag("expanded_player_favorite_button"),
+          ) {
+            Icon(
+              imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+              contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
+              tint = if (isFavorite) accentColor else Color.White,
+              modifier = Modifier.size(16.dp),
+            )
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(8.dp))
+
+      when {
+        lyrics != null && lyrics.hasLyrics -> {
+          LazyColumn(
+            state = lyricsListState,
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f)
+              .testTag("expanded_player_lyrics_list"),
+            contentPadding = PaddingValues(vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            itemsIndexed(lyrics.lines, key = { idx, line -> "${idx}_${line.startMs}" }) { index, line ->
+              val isCurrentLine = index == activeLineIndex
+              val isPastLine = activeLineIndex >= 0 && index < activeLineIndex
+              Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (isCurrentLine) accentColor.copy(alpha = 0.24f) else Color.Transparent,
+                border = if (isCurrentLine) BorderStroke(1.dp, accentColor.copy(alpha = 0.65f)) else null,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .clip(RoundedCornerShape(14.dp))
+                  .clickable { onSeekToLyricMs(line.startMs) }
+                  .semantics { selected = isCurrentLine }
+                  .testTag("lyric_line_$index"),
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                  verticalAlignment = Alignment.Top,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Text(
+                    text = AudioRecorderEngine.formatDurationMs(line.startMs),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = if (isCurrentLine) FontWeight.Bold else FontWeight.Normal,
+                    color = when {
+                      isCurrentLine -> accentColor
+                      isPastLine -> Color.White.copy(alpha = 0.42f)
+                      else -> Color.White.copy(alpha = 0.58f)
+                    },
+                    modifier = Modifier.padding(top = 3.dp),
+                  )
+                  Text(
+                    text = line.text,
+                    style = if (isCurrentLine) {
+                      MaterialTheme.typography.titleMedium
+                    } else {
+                      MaterialTheme.typography.bodyLarge
+                    },
+                    fontWeight = if (isCurrentLine) FontWeight.Bold else FontWeight.Medium,
+                    color = when {
+                      isCurrentLine -> Color.White
+                      isPastLine -> Color.White.copy(alpha = 0.48f)
+                      else -> Color.White.copy(alpha = 0.78f)
+                    },
+                    modifier = Modifier.weight(1f),
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        isTranscribing -> {
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f)
+              .padding(16.dp)
+              .testTag("expanded_player_lyrics_transcribing"),
+            contentAlignment = Alignment.Center,
+          ) {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Lyrics,
+                contentDescription = null,
+                tint = accentColor,
+                modifier = Modifier.size(32.dp),
+              )
+              Text(
+                text = "Generating synced .lrc lyrics with Whisper…",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                textAlign = TextAlign.Center,
+              )
+              Text(
+                text = "Runs completely offline on device",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
+              )
+            }
+          }
+        }
+
+        lyrics != null && lyrics.isInstrumental -> {
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f)
+              .padding(16.dp)
+              .testTag("expanded_player_lyrics_instrumental"),
+            contentAlignment = Alignment.Center,
+          ) {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = MusicPlayerEngine.INSTRUMENTAL_LYRIC_MARKER,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                textAlign = TextAlign.Center,
+              )
+              Text(
+                text = "No vocal speech detected in this song",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.72f),
+                textAlign = TextAlign.Center,
+              )
+            }
+          }
+        }
+
+        else -> {
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f)
+              .padding(16.dp)
+              .testTag("expanded_player_lyrics_empty"),
+            contentAlignment = Alignment.Center,
+          ) {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Lyrics,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.65f),
+                modifier = Modifier.size(32.dp),
+              )
+              Text(
+                text = if (track.isSampleTrack) {
+                  "Synthesized sample track (Instrumental)"
+                } else {
+                  "No lyric file (.lrc / .srt) found yet"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.85f),
+                textAlign = TextAlign.Center,
+              )
+              if (!track.isSampleTrack && track.file != null) {
+                FilledTonalButton(
+                  onClick = { onGenerateLyrics(false) },
+                  shape = CircleShape,
+                  colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = accentColor.copy(alpha = 0.28f),
+                    contentColor = Color.White,
+                  ),
+                  modifier = Modifier.testTag("expanded_player_generate_lyrics_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Lyrics,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    text = "Generate .lrc with Whisper",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -10768,6 +11205,7 @@ private fun TrackDetailsDialog(
   track: MusicTrack,
   palette: AlbumArtPalette,
   playStat: TrackPlayStats = TrackPlayStats(),
+  lyrics: MusicLyricsDocument? = null,
   onSelectColor: (String) -> Unit,
   onDismiss: () -> Unit,
 ) {
@@ -11023,12 +11461,19 @@ private fun TrackDetailsDialog(
                 }
 
                 TrackDetailsSection.FILE_INFO -> {
+                  val lyricsLabel = when {
+                    lyrics == null -> "None"
+                    lyrics.isInstrumental -> "${lyrics.sourceFile?.name ?: "Instrumental"} (Instrumental)"
+                    lyrics.sourceFile != null -> "${lyrics.sourceFile.name} (${lyrics.lines.size} lines)"
+                    else -> "${lyrics.sourceFormat} (${lyrics.lines.size} lines)"
+                  }
                   DetailRow(label = "Format", value = track.formatLabel, isMono = true)
                   DetailRow(label = "Bitrate", value = track.bitrateFormatted, isMono = true)
                   DetailRow(label = "Sample Rate", value = track.sampleRateFormatted, isMono = true)
                   DetailRow(label = "Channels", value = track.channelsLabel)
                   DetailRow(label = "Size", value = track.sizeFormatted, isMono = true)
                   DetailRow(label = "Source", value = track.sourceLabel, isMono = true)
+                  DetailRow(label = "Lyrics", value = lyricsLabel, isMono = true)
                 }
               }
             }

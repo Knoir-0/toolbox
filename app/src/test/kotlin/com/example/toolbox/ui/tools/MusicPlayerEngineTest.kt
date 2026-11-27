@@ -2971,4 +2971,222 @@ class MusicPlayerEngineTest {
       com.example.toolbox.ui.main.resetAllSettingsToDefaults(repo)
     }
   }
+
+  @Test
+  fun lrcAndSrtLyrics_parseFormatCleanHallucinationsAndResolveActiveLine() {
+    val sampleTrack = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.first().copy(
+      title = "Midnight Skyline",
+      artist = "Aurora Synth",
+      album = "Midnight Odyssey",
+      durationMs = 185_000L,
+    )
+
+    // 1. Format Whisper segments into standard .lrc with metadata tags and non-vocal noise stripped
+    val rawWhisperSegments = listOf(
+      SpeechTranscriptSegment(startMs = 0L, endMs = 2_000L, text = "[BLANK_AUDIO]"),
+      SpeechTranscriptSegment(startMs = 2_500L, endMs = 6_400L, text = "Chasing neon lights across the midnight sky"),
+      SpeechTranscriptSegment(startMs = 6_400L, endMs = 9_000L, text = "(Music)"),
+      SpeechTranscriptSegment(startMs = 9_150L, endMs = 14_800L, text = "[music] Holding onto echoes in the rain"),
+    )
+    val formattedLrc = MusicPlayerEngine.formatLyricsAsLrc(
+      track = sampleTrack,
+      segments = rawWhisperSegments,
+    )
+    assertTrue(formattedLrc.contains("[ti:Midnight Skyline]"))
+    assertTrue(formattedLrc.contains("[ar:Aurora Synth]"))
+    assertTrue(formattedLrc.contains("[al:Midnight Odyssey]"))
+    assertTrue(formattedLrc.contains("[by:Toolbox Whisper STT]"))
+    assertTrue(formattedLrc.contains("[00:02.50] Chasing neon lights across the midnight sky"))
+    assertTrue(formattedLrc.contains("[00:09.15] Holding onto echoes in the rain"))
+    assertFalse(formattedLrc.contains("BLANK_AUDIO"))
+
+    // 2. Parse formatted .lrc back into MusicLyricsDocument and resolve active line by timestamp
+    val parsedLrc = MusicPlayerEngine.parseLrcLyrics(formattedLrc, trackDurationMs = sampleTrack.durationMs)
+    assertTrue(parsedLrc.hasLyrics)
+    assertFalse(parsedLrc.isInstrumental)
+    assertEquals("LRC", parsedLrc.sourceFormat)
+    assertEquals(2, parsedLrc.lines.size)
+    assertEquals(2_500L, parsedLrc.lines[0].startMs)
+    assertEquals(9_150L, parsedLrc.lines[0].endMs)
+    assertEquals(9_150L, parsedLrc.lines[1].startMs)
+    assertEquals(185_000L, parsedLrc.lines[1].endMs)
+
+    assertEquals(-1, MusicPlayerEngine.resolveActiveLyricLineIndex(parsedLrc.lines, 1_000L))
+    assertEquals(0, MusicPlayerEngine.resolveActiveLyricLineIndex(parsedLrc.lines, 2_500L))
+    assertEquals(0, MusicPlayerEngine.resolveActiveLyricLineIndex(parsedLrc.lines, 7_000L))
+    assertEquals(1, MusicPlayerEngine.resolveActiveLyricLineIndex(parsedLrc.lines, 9_150L))
+    assertEquals(1, MusicPlayerEngine.resolveActiveLyricLineIndex(parsedLrc.lines, 120_000L))
+
+    // 3. Multi-timestamp chorus lines and [offset:+/-ms] tags in .lrc
+    val chorusLrc = """
+      [offset:500]
+      [00:10.00][00:40.00] Starlight chorus refrain
+      [00:25.00] Second verse bridge
+    """.trimIndent()
+    val parsedChorus = MusicPlayerEngine.parseLrcLyrics(chorusLrc, trackDurationMs = 60_000L)
+    assertEquals(3, parsedChorus.lines.size)
+    assertEquals(10_500L, parsedChorus.lines[0].startMs)
+    assertEquals("Starlight chorus refrain", parsedChorus.lines[0].text)
+    assertEquals(25_500L, parsedChorus.lines[1].startMs)
+    assertEquals("Second verse bridge", parsedChorus.lines[1].text)
+    assertEquals(40_500L, parsedChorus.lines[2].startMs)
+    assertEquals("Starlight chorus refrain", parsedChorus.lines[2].text)
+
+    // 4. Instrumental-only Whisper output produces instrumental .lrc marker and isInstrumental = true
+    val instrumentalLrc = MusicPlayerEngine.formatLyricsAsLrc(
+      track = sampleTrack,
+      segments = listOf(
+        SpeechTranscriptSegment(startMs = 0L, endMs = 4_000L, text = "[BLANK_AUDIO]"),
+        SpeechTranscriptSegment(startMs = 4_000L, endMs = 8_000L, text = "♪♪♪"),
+      ),
+    )
+    val parsedInstrumental = MusicPlayerEngine.parseLrcLyrics(instrumentalLrc)
+    assertTrue(parsedInstrumental.isInstrumental)
+    assertFalse(parsedInstrumental.hasLyrics)
+    assertEquals("", parsedInstrumental.plainText)
+
+    // 5. SubRip (.srt) lyrics parsing works seamlessly
+    val srtContent = """
+      1
+      00:00:01,250 --> 00:00:05,000
+      Golden leaves falling on the boulevard
+
+      2
+      00:00:05,500 --> 00:00:10,200
+      Warm espresso in the pouring rain
+    """.trimIndent()
+    val parsedSrt = MusicPlayerEngine.parseSrtLyrics(srtContent, trackDurationMs = 30_000L)
+    assertTrue(parsedSrt.hasLyrics)
+    assertEquals("SRT", parsedSrt.sourceFormat)
+    assertEquals(2, parsedSrt.lines.size)
+    assertEquals(1_250L, parsedSrt.lines[0].startMs)
+    assertEquals("Golden leaves falling on the boulevard", parsedSrt.lines[0].text)
+    assertEquals(5_500L, parsedSrt.lines[1].startMs)
+    assertEquals("Warm espresso in the pouring rain", parsedSrt.lines[1].text)
+  }
+
+  @Test
+  fun backgroundWhisperLyricsIndexing_generatesLrcSidecars_readsExistingSrt_prioritizesCurrentTrack_andSyncsFileOps() = runBlocking {
+    val tmpDir = Files.createTempDirectory("music_lyrics_index_test").toFile()
+    val musicDir = File(tmpDir, "Music").apply { mkdirs() }
+    val sampleWav = MusicPlayerEngine.ensurePlayableSampleWavFile(
+      tmpDir,
+      MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.first(),
+    )
+
+    val track1File = File(musicDir, "Aurora Synth - First Song.wav")
+    val track2File = File(musicDir, "Velvet Trio - Existing Subtitle Song.wav")
+    val track3File = File(musicDir, "Sierra Pines - Priority Song.wav")
+    sampleWav.copyTo(track1File, overwrite = true)
+    sampleWav.copyTo(track2File, overwrite = true)
+    sampleWav.copyTo(track3File, overwrite = true)
+
+    // Pre-populate a .srt sidecar next to track2File -> must be read without running Whisper
+    val track2SrtFile = File(musicDir, "Velvet Trio - Existing Subtitle Song.srt")
+    track2SrtFile.writeText(
+      """
+      1
+      00:00:02,000 --> 00:00:06,000
+      Velvet saxophones under streetlamps
+      """.trimIndent(),
+      Charsets.UTF_8,
+    )
+
+    val transcribedOrder = mutableListOf<String>()
+    MusicPlayerEngine.clearTrackMetadataCache()
+    MusicPlayerEngine.customWhisperTranscriberForTest = { audioFile, track ->
+      transcribedOrder.add(audioFile.name)
+      SpeechTranscriptDocument(
+        rawText = "Whisper lyrics for ${track.title}",
+        segments = listOf(
+          SpeechTranscriptSegment(
+            startMs = 1_500L,
+            endMs = 5_500L,
+            text = if (audioFile == track3File) {
+              "Whispering pines across the canyon ridge"
+            } else {
+              "Synthesizer waves on the cyber horizon"
+            },
+          )
+        ),
+        title = track.title,
+      )
+    }
+
+    try {
+      val scannedTracks = MusicPlayerEngine.scanMusicDirectories(
+        directories = listOf(musicDir),
+        inspectMetadataRetriever = false,
+      )
+      assertEquals(3, scannedTracks.size)
+      val t1 = scannedTracks.first { it.file == track1File }
+      val t2 = scannedTracks.first { it.file == track2File }
+      val t3 = scannedTracks.first { it.file == track3File }
+
+      // Prioritize track3 -> Whisper transcribes track3 BEFORE track1, and skips track2 (already has .srt)
+      val indexedMap = MusicPlayerEngine.indexTrackLyricsInBackground(
+        tracks = scannedTracks,
+        prioritizeTrackSelector = { t3.id },
+      )
+
+      assertEquals(
+        listOf("Sierra Pines - Priority Song.wav", "Aurora Synth - First Song.wav"),
+        transcribedOrder,
+      )
+      assertEquals(3, indexedMap.size)
+
+      // Verify .lrc sidecar files were generated alongside track1 and track3, while track2 kept its .srt
+      val track1Lrc = File(musicDir, "Aurora Synth - First Song.lrc")
+      val track3Lrc = File(musicDir, "Sierra Pines - Priority Song.lrc")
+      assertTrue(track1Lrc.exists())
+      assertTrue(track3Lrc.exists())
+      assertFalse(File(musicDir, "Velvet Trio - Existing Subtitle Song.lrc").exists())
+      assertEquals("SRT", indexedMap[t2.id]?.sourceFormat)
+      assertEquals("LRC", indexedMap[t1.id]?.sourceFormat)
+      assertEquals("LRC", indexedMap[t3.id]?.sourceFormat)
+
+      // Search filters tracks, albums, artists, and playlists by lyric content
+      val lyricFilteredTracks = MusicPlayerEngine.filterTracks(scannedTracks, "canyon ridge", indexedMap)
+      assertEquals(listOf(t3.id), lyricFilteredTracks.map { it.id })
+      val srtFilteredTracks = MusicPlayerEngine.filterTracks(scannedTracks, "saxophones", indexedMap)
+      assertEquals(listOf(t2.id), srtFilteredTracks.map { it.id })
+      val lyricFilteredArtists = MusicPlayerEngine.filterArtists(
+        MusicPlayerEngine.buildArtists(scannedTracks),
+        "cyber horizon",
+        indexedMap,
+      )
+      assertEquals(listOf("Aurora Synth"), lyricFilteredArtists.map { it.name })
+
+      // Verify session duplicate, rename, and delete keep sidecar lyric files synchronized on disk
+      val session = MusicPlaybackSession(context = null, initialTracks = scannedTracks)
+      try {
+        session.awaitLyricsIndexing()
+        assertEquals(3, session.trackLyricsMap.size)
+
+        // Duplicate track1 -> copies sidecar .lrc
+        val duplicated = session.duplicateTrack(t1)
+        val dupAudioFile = duplicated.file!!
+        val dupLrcFile = MusicPlayerEngine.resolvePreferredSidecarLrcFile(dupAudioFile)
+        assertTrue(dupLrcFile.exists())
+        assertTrue(session.trackLyricsMap[duplicated.id]?.plainText?.contains("cyber horizon") == true)
+
+        // Rename duplicated track -> renames sidecar .lrc
+        val renamed = session.renameTrack(duplicated, "Aurora Synth - Remixed Song")
+        assertNotNull(renamed)
+        val renamedLrcFile = File(musicDir, "Aurora Synth - Remixed Song.lrc")
+        assertFalse(dupLrcFile.exists())
+        assertTrue(renamedLrcFile.exists())
+
+        // Delete renamed track -> deletes sidecar .lrc too
+        session.deleteTrack(renamed!!)
+        assertFalse(renamedLrcFile.exists())
+      } finally {
+        session.release()
+      }
+    } finally {
+      MusicPlayerEngine.resetPlaybackSession()
+      MusicPlayerEngine.clearTrackMetadataCache()
+      tmpDir.deleteRecursively()
+    }
+  }
 }

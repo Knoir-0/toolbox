@@ -119,6 +119,19 @@ enum class AppPermission(
       Tool.DECIBEL_METER,
     ),
   ),
+  CALENDAR(
+    title = "Calendar",
+    manifestPermission = "android.permission.READ_CALENDAR",
+    manifestPermissions = listOf(
+      "android.permission.READ_CALENDAR",
+      "android.permission.WRITE_CALENDAR",
+    ),
+    description = "Read, filter, create, edit, and delete events across synced and local device calendars",
+    toolsUsingPermission = listOf(
+      Tool.CALENDAR,
+      Tool.SEARCH,
+    ),
+  ),
   STORAGE(
     title = "Files & Storage",
     manifestPermission = "android.permission.MANAGE_EXTERNAL_STORAGE",

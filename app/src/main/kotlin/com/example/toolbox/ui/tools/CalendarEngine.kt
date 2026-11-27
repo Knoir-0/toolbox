@@ -6,11 +6,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.CalendarContract
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +39,7 @@ import java.util.Calendar
 import java.util.Collections
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 
 const val CALENDAR_PREFS_NAME = "calendar_tool_preferences"
@@ -45,6 +49,11 @@ const val KEY_CALENDAR_ENABLED_CATEGORIES = "calendar_enabled_categories"
 const val KEY_CALENDAR_SHOW_TODOS = "calendar_show_todos"
 const val KEY_CALENDAR_SHOW_HOLIDAYS = "calendar_show_holidays"
 const val KEY_CALENDAR_FAVORITE_EVENT_IDS = "calendar_favorite_event_ids"
+const val KEY_CALENDAR_SYNC_DEVICE_CALENDARS = "calendar_sync_device_calendars"
+const val KEY_CALENDAR_ENABLED_DEVICE_CALENDAR_IDS = "calendar_enabled_device_calendar_ids"
+const val KEY_CALENDAR_DEFAULT_DEVICE_CALENDAR_ID = "calendar_default_device_calendar_id"
+const val KEY_CALENDAR_HAS_PROMPTED_PERMISSION = "calendar_has_prompted_permission"
+const val TARGET_CALENDAR_LOCAL_ID = -1L
 
 /**
  * Google Calendar-inspired view modes supported by the Calendar tool.
@@ -212,7 +221,63 @@ enum class CalendarEventColor(
           it.displayName.equals(name.trim(), ignoreCase = true)
       } ?: fallback
     }
+
+    /**
+     * Maps any raw ARGB calendar or event color from Android's [CalendarContract] to the closest
+     * Google Calendar [CalendarEventColor] swatch so light and dark theme container/content contrast
+     * tokens remain legible.
+     */
+    fun closestToArgb(argb: Int): CalendarEventColor {
+      val r = (argb shr 16) and 0xFF
+      val g = (argb shr 8) and 0xFF
+      val b = argb and 0xFF
+      return entries.minByOrNull { swatch ->
+        val swatchRgb = swatch.hex.removePrefix("#").toIntOrNull(16) ?: 0x039BE5
+        val sr = (swatchRgb shr 16) and 0xFF
+        val sg = (swatchRgb shr 8) and 0xFF
+        val sb = swatchRgb and 0xFF
+        val dr = r - sr
+        val dg = g - sg
+        val db = b - sb
+        dr * dr + dg * dg + db * db
+      } ?: PEACOCK
+    }
   }
+}
+
+/**
+ * Metadata for a synced or local calendar exposed by Android's [CalendarContract.Calendars] provider.
+ */
+@Immutable
+data class DeviceCalendarInfo(
+  val id: Long,
+  val displayName: String,
+  val accountName: String = "",
+  val accountType: String = "",
+  val ownerAccount: String = "",
+  val colorArgb: Int = 0xFF039BE5.toInt(),
+  val isVisible: Boolean = true,
+  val isPrimary: Boolean = false,
+  val accessLevel: Int = CalendarContract.Calendars.CAL_ACCESS_OWNER,
+) {
+  val isWritable: Boolean
+    get() = accessLevel >= CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR
+
+  val accentColor: Color
+    get() = Color(colorArgb or 0xFF000000.toInt())
+
+  val hexColor: String
+    get() = String.format(Locale.US, "#%06X", colorArgb and 0xFFFFFF)
+
+  val closestSwatch: CalendarEventColor
+    get() = CalendarEventColor.closestToArgb(colorArgb)
+
+  val accountSubtitle: String
+    get() = when {
+      accountName.isNotBlank() && !accountName.equals(displayName, ignoreCase = true) -> accountName
+      ownerAccount.isNotBlank() && !ownerAccount.equals(displayName, ignoreCase = true) -> ownerAccount
+      else -> if (isWritable) "On-device calendar" else "Read-only calendar"
+    }
 }
 
 internal fun parseCalendarColorHex(hex: String): Color {
@@ -430,6 +495,13 @@ data class CalendarEvent(
   val linkedTodoTaskId: String? = null,
   val isCompletedTask: Boolean = false,
   val notifiedTriggerMillis: Long? = null,
+  val deviceCalendarId: Long? = null,
+  val deviceEventId: Long? = null,
+  val deviceCalendarName: String? = null,
+  val deviceAccountName: String? = null,
+  val deviceCalendarColorArgb: Int? = null,
+  val isDeviceEventWritable: Boolean = true,
+  val isPreExpandedInstance: Boolean = false,
 ) {
   val durationMillis: Long
     get() = (endMillis - startMillis).coerceAtLeast(if (isAllDay) 86_400_000L else 900_000L)
@@ -440,14 +512,23 @@ data class CalendarEvent(
   val endDay: CalendarDay
     get() = CalendarDay.fromMillis(maxOf(startMillis, endMillis - if (isAllDay) 1L else 0L))
 
+  val isDeviceCalendarEvent: Boolean
+    get() = deviceCalendarId != null && deviceEventId != null
+
   val isReadOnlyBuiltIn: Boolean
-    get() = isBuiltInHoliday || linkedTodoTaskId != null
+    get() = isBuiltInHoliday || linkedTodoTaskId != null || (isDeviceCalendarEvent && !isDeviceEventWritable)
+
+  val calendarSourceLabel: String
+    get() = deviceCalendarName?.takeIf { it.isNotBlank() } ?: category.displayName
+
+  val favoriteKey: String
+    get() = if (isDeviceCalendarEvent) "device_ev_${deviceCalendarId}_$deviceEventId" else id
 
   val reminderOption: CalendarReminderOption
     get() = CalendarReminderOption.fromMinutes(reminderMinutesBefore)
 
   fun triggerAlarmAtMillis(nowMillis: Long = System.currentTimeMillis()): Long? {
-    if (reminderMinutesBefore < 0 || isBuiltInHoliday || linkedTodoTaskId != null) return null
+    if (reminderMinutesBefore < 0 || isBuiltInHoliday || linkedTodoTaskId != null || isDeviceCalendarEvent) return null
     val leadMillis = reminderMinutesBefore * 60_000L
     if (recurrence == CalendarRecurrence.NONE) {
       return startMillis - leadMillis
@@ -584,6 +665,21 @@ interface CalendarRepository {
 
   fun getShowHolidays(): Boolean = true
   fun setShowHolidays(show: Boolean) {}
+
+  fun getSyncDeviceCalendars(): Boolean = true
+  fun setSyncDeviceCalendars(sync: Boolean) {}
+
+  fun getEnabledDeviceCalendarIds(): Set<Long>? = null
+  fun setEnabledDeviceCalendarIds(ids: Set<Long>?) {}
+
+  fun getPreferredTargetCalendarId(): Long? = null
+  fun setPreferredTargetCalendarId(calendarId: Long?) {}
+
+  fun getFavoriteEventKeys(): Set<String> = emptySet()
+  fun setFavoriteEventKeys(keys: Set<String>) {}
+
+  fun hasPromptedDeviceCalendarPermission(): Boolean = false
+  fun setHasPromptedDeviceCalendarPermission(prompted: Boolean) {}
 }
 
 /**
@@ -595,12 +691,21 @@ class InMemoryCalendarRepository(
   initialEnabledCategories: Set<CalendarCategory> = CalendarCategory.entries.toSet(),
   initialShowTodos: Boolean = true,
   initialShowHolidays: Boolean = true,
+  initialSyncDeviceCalendars: Boolean = true,
+  initialEnabledDeviceCalendarIds: Set<Long>? = null,
+  initialPreferredTargetCalendarId: Long? = null,
+  initialFavoriteEventKeys: Set<String> = emptySet(),
 ) : CalendarRepository {
   private var events: List<CalendarEvent> = initialEvents
   private var viewMode: CalendarViewMode = initialViewMode
   private var enabledCategories: Set<CalendarCategory> = initialEnabledCategories
   private var showTodos: Boolean = initialShowTodos
   private var showHolidays: Boolean = initialShowHolidays
+  private var syncDeviceCalendars: Boolean = initialSyncDeviceCalendars
+  private var enabledDeviceCalendarIds: Set<Long>? = initialEnabledDeviceCalendarIds
+  private var preferredTargetCalendarId: Long? = initialPreferredTargetCalendarId
+  private var favoriteEventKeys: Set<String> = initialFavoriteEventKeys
+  private var promptedDevicePermission: Boolean = false
 
   override fun loadEvents(): List<CalendarEvent> = events
 
@@ -631,6 +736,36 @@ class InMemoryCalendarRepository(
   override fun setShowHolidays(show: Boolean) {
     this.showHolidays = show
   }
+
+  override fun getSyncDeviceCalendars(): Boolean = syncDeviceCalendars
+
+  override fun setSyncDeviceCalendars(sync: Boolean) {
+    this.syncDeviceCalendars = sync
+  }
+
+  override fun getEnabledDeviceCalendarIds(): Set<Long>? = enabledDeviceCalendarIds
+
+  override fun setEnabledDeviceCalendarIds(ids: Set<Long>?) {
+    this.enabledDeviceCalendarIds = ids
+  }
+
+  override fun getPreferredTargetCalendarId(): Long? = preferredTargetCalendarId
+
+  override fun setPreferredTargetCalendarId(calendarId: Long?) {
+    this.preferredTargetCalendarId = calendarId
+  }
+
+  override fun getFavoriteEventKeys(): Set<String> = favoriteEventKeys
+
+  override fun setFavoriteEventKeys(keys: Set<String>) {
+    this.favoriteEventKeys = keys
+  }
+
+  override fun hasPromptedDeviceCalendarPermission(): Boolean = promptedDevicePermission
+
+  override fun setHasPromptedDeviceCalendarPermission(prompted: Boolean) {
+    this.promptedDevicePermission = prompted
+  }
 }
 
 /**
@@ -651,7 +786,12 @@ class SharedPreferencesCalendarRepository(
   }
 
   override fun saveEvents(events: List<CalendarEvent>) {
-    val persistedOnly = events.filter { !it.isBuiltInHoliday && it.linkedTodoTaskId == null && it.title.isNotBlank() }
+    val persistedOnly = events.filter {
+      !it.isBuiltInHoliday &&
+        it.linkedTodoTaskId == null &&
+        !it.isDeviceCalendarEvent &&
+        it.title.isNotBlank()
+    }
     val json = CalendarEngine.serializeEventsJson(persistedOnly)
     prefs.edit().putString(KEY_CALENDAR_EVENTS_JSON, json).apply()
   }
@@ -696,6 +836,61 @@ class SharedPreferencesCalendarRepository(
 
   override fun setShowHolidays(show: Boolean) {
     prefs.edit().putBoolean(KEY_CALENDAR_SHOW_HOLIDAYS, show).apply()
+  }
+
+  override fun getSyncDeviceCalendars(): Boolean =
+    prefs.getBoolean(KEY_CALENDAR_SYNC_DEVICE_CALENDARS, true)
+
+  override fun setSyncDeviceCalendars(sync: Boolean) {
+    prefs.edit().putBoolean(KEY_CALENDAR_SYNC_DEVICE_CALENDARS, sync).apply()
+  }
+
+  override fun getEnabledDeviceCalendarIds(): Set<Long>? {
+    if (!prefs.contains(KEY_CALENDAR_ENABLED_DEVICE_CALENDAR_IDS)) return null
+    val raw = prefs.getString(KEY_CALENDAR_ENABLED_DEVICE_CALENDAR_IDS, "") ?: ""
+    if (raw.isBlank()) return emptySet()
+    return raw.split(",")
+      .mapNotNull { it.trim().toLongOrNull() }
+      .toSet()
+  }
+
+  override fun setEnabledDeviceCalendarIds(ids: Set<Long>?) {
+    if (ids == null) {
+      prefs.edit().remove(KEY_CALENDAR_ENABLED_DEVICE_CALENDAR_IDS).apply()
+    } else {
+      val serialized = ids.sorted().joinToString(",")
+      prefs.edit().putString(KEY_CALENDAR_ENABLED_DEVICE_CALENDAR_IDS, serialized).apply()
+    }
+  }
+
+  override fun getPreferredTargetCalendarId(): Long? {
+    if (!prefs.contains(KEY_CALENDAR_DEFAULT_DEVICE_CALENDAR_ID)) return null
+    return prefs.getLong(KEY_CALENDAR_DEFAULT_DEVICE_CALENDAR_ID, TARGET_CALENDAR_LOCAL_ID)
+  }
+
+  override fun setPreferredTargetCalendarId(calendarId: Long?) {
+    if (calendarId == null) {
+      prefs.edit().remove(KEY_CALENDAR_DEFAULT_DEVICE_CALENDAR_ID).apply()
+    } else {
+      prefs.edit().putLong(KEY_CALENDAR_DEFAULT_DEVICE_CALENDAR_ID, calendarId).apply()
+    }
+  }
+
+  override fun getFavoriteEventKeys(): Set<String> {
+    val raw = prefs.getString(KEY_CALENDAR_FAVORITE_EVENT_IDS, null) ?: return emptySet()
+    if (raw.isBlank()) return emptySet()
+    return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+  }
+
+  override fun setFavoriteEventKeys(keys: Set<String>) {
+    prefs.edit().putString(KEY_CALENDAR_FAVORITE_EVENT_IDS, keys.sorted().joinToString(",")).apply()
+  }
+
+  override fun hasPromptedDeviceCalendarPermission(): Boolean =
+    prefs.getBoolean(KEY_CALENDAR_HAS_PROMPTED_PERMISSION, false)
+
+  override fun setHasPromptedDeviceCalendarPermission(prompted: Boolean) {
+    prefs.edit().putBoolean(KEY_CALENDAR_HAS_PROMPTED_PERMISSION, prompted).apply()
   }
 
   companion object {
@@ -981,8 +1176,8 @@ object CalendarEngine {
       )
     }
 
-    // Check recurrence rules for days after eventStartDay
-    if (event.recurrence == CalendarRecurrence.NONE) return null
+    // Check recurrence rules for days after eventStartDay (skipped when already expanded via CalendarContract.Instances)
+    if (event.isPreExpandedInstance || event.recurrence == CalendarRecurrence.NONE) return null
 
     val daysBetween = daysBetween(eventStartDay, day)
     if (daysBetween <= 0) return null
@@ -1025,15 +1220,24 @@ object CalendarEngine {
 
   /**
    * Returns all event occurrences on [day], sorted with all-day events first and then chronologically by start time.
+   * Local Toolbox events/holidays/tasks are filtered by [enabledCategories], whereas synced device calendar events
+   * are filtered independently by [enabledDeviceCalendarIds] (when non-null).
    */
   fun occurrencesForDay(
     events: List<CalendarEvent>,
     day: CalendarDay,
     enabledCategories: Set<CalendarCategory> = CalendarCategory.entries.toSet(),
+    enabledDeviceCalendarIds: Set<Long>? = null,
   ): List<CalendarEventOccurrence> {
     return events
       .asSequence()
-      .filter { it.category in enabledCategories }
+      .filter { event ->
+        if (event.isDeviceCalendarEvent) {
+          enabledDeviceCalendarIds == null || event.deviceCalendarId in enabledDeviceCalendarIds
+        } else {
+          event.category in enabledCategories
+        }
+      }
       .mapNotNull { event -> occurrenceForDay(event, day) }
       .sortedWith(
         compareByDescending<CalendarEventOccurrence> { it.event.isAllDay }
@@ -1050,9 +1254,10 @@ object CalendarEngine {
     events: List<CalendarEvent>,
     days: List<CalendarDay>,
     enabledCategories: Set<CalendarCategory> = CalendarCategory.entries.toSet(),
+    enabledDeviceCalendarIds: Set<Long>? = null,
   ): Map<CalendarDay, List<CalendarEventOccurrence>> {
     return days.associateWith { day ->
-      occurrencesForDay(events, day, enabledCategories)
+      occurrencesForDay(events, day, enabledCategories, enabledDeviceCalendarIds)
     }
   }
 
@@ -1080,6 +1285,7 @@ object CalendarEngine {
     nowMillis: Long = System.currentTimeMillis(),
     enabledCategories: Set<CalendarCategory> = CalendarCategory.entries.toSet(),
     horizonDays: Int = 60,
+    enabledDeviceCalendarIds: Set<Long>? = null,
   ): Map<CalendarDay, List<CalendarEventOccurrence>> {
     val effectiveStartDay = maxOf(anchorDay, today)
     val endOfAnchorMonth = CalendarDay(
@@ -1097,7 +1303,7 @@ object CalendarEngine {
     val result = LinkedHashMap<CalendarDay, List<CalendarEventOccurrence>>()
     for (day in candidateDays) {
       val upcomingForDay = filterUpcomingOccurrences(
-        occurrences = occurrencesForDay(events, day, enabledCategories),
+        occurrences = occurrencesForDay(events, day, enabledCategories, enabledDeviceCalendarIds),
         today = today,
         nowMillis = nowMillis,
       )
@@ -1109,21 +1315,27 @@ object CalendarEngine {
   }
 
   /**
-   * Searches events matching [query], optional [categoryFilter], and optional [favoritesOnly] flag.
+   * Searches events matching [query], optional [categoryFilter], optional [deviceCalendarIdFilter],
+   * and optional [favoritesOnly] flag.
    */
   fun searchEvents(
     events: List<CalendarEvent>,
     query: String,
     categoryFilter: CalendarCategory? = null,
     favoritesOnly: Boolean = false,
+    deviceCalendarIdFilter: Long? = null,
   ): List<CalendarEvent> {
     val trimmed = query.trim().lowercase(Locale.ROOT)
     val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }
     val seenHolidayTitles = mutableSetOf<String>()
+    val seenRecurringDeviceEvents = mutableSetOf<String>()
     return events
       .filter { event ->
         if (favoritesOnly && !event.isFavorite) return@filter false
-        if (categoryFilter != null && event.category != categoryFilter) return@filter false
+        if (deviceCalendarIdFilter != null && event.deviceCalendarId != deviceCalendarIdFilter) return@filter false
+        if (categoryFilter != null && (event.isDeviceCalendarEvent || event.category != categoryFilter)) {
+          return@filter false
+        }
         if (tokens.isEmpty()) return@filter true
         val searchable = buildString {
           append(event.title.lowercase(Locale.ROOT))
@@ -1131,6 +1343,10 @@ object CalendarEngine {
           append(event.description.lowercase(Locale.ROOT))
           append(' ')
           append(event.location.lowercase(Locale.ROOT))
+          append(' ')
+          append(event.calendarSourceLabel.lowercase(Locale.ROOT))
+          append(' ')
+          append(event.deviceAccountName.orEmpty().lowercase(Locale.ROOT))
           append(' ')
           append(event.category.displayName.lowercase(Locale.ROOT))
           append(' ')
@@ -1148,10 +1364,11 @@ object CalendarEngine {
           .thenBy { it.title.lowercase(Locale.ROOT) }
       )
       .filter { event ->
-        if (!event.isBuiltInHoliday) {
-          true
-        } else {
-          seenHolidayTitles.add(event.title.lowercase(Locale.ROOT))
+        when {
+          event.isBuiltInHoliday -> seenHolidayTitles.add(event.title.lowercase(Locale.ROOT))
+          event.isDeviceCalendarEvent && event.recurrence != CalendarRecurrence.NONE ->
+            seenRecurringDeviceEvents.add("${event.deviceCalendarId}_${event.deviceEventId}")
+          else -> true
         }
       }
   }
@@ -1228,7 +1445,7 @@ object CalendarEngine {
       appendLine(event.title)
       appendLine("Date: ${formatDayHeader(event.startDay)}")
       appendLine("Time: ${formatTimeRange(event.startMillis, event.endMillis, event.isAllDay)}")
-      appendLine("Calendar: ${event.category.displayName} (${event.color.displayName})")
+      appendLine("Calendar: ${event.calendarSourceLabel} (${event.color.displayName})")
       if (event.recurrence != CalendarRecurrence.NONE) {
         appendLine("Repeats: ${event.recurrence.label}")
       }
@@ -1240,6 +1457,156 @@ object CalendarEngine {
         appendLine(event.description)
       }
     }.trim()
+  }
+
+  /**
+   * Resolves which [DeviceCalendarInfo] IDs are active given [storedEnabledIds] (`null` = not yet customized,
+   * defaulting to calendars marked visible in the system provider, or all calendars if none are marked visible).
+   */
+  fun resolveActiveDeviceCalendarIds(
+    availableCalendars: List<DeviceCalendarInfo>,
+    storedEnabledIds: Set<Long>?,
+  ): Set<Long> {
+    if (availableCalendars.isEmpty()) return emptySet()
+    val validIds = availableCalendars.map { it.id }.toSet()
+    if (storedEnabledIds != null) {
+      return storedEnabledIds.intersect(validIds)
+    }
+    val visibleIds = availableCalendars.filter { it.isVisible }.map { it.id }.toSet()
+    return visibleIds.ifEmpty { validIds }
+  }
+
+  /**
+   * Resolves the default target device calendar ID when creating a new event (`null` = Toolbox Local).
+   */
+  fun resolveDefaultTargetDeviceCalendarId(
+    preferredId: Long?,
+    writableCalendars: List<DeviceCalendarInfo>,
+    enabledDeviceCalendarIds: Set<Long>,
+    syncEnabled: Boolean,
+  ): Long? {
+    if (!syncEnabled || writableCalendars.isEmpty()) return null
+    if (preferredId == TARGET_CALENDAR_LOCAL_ID) return null
+    if (preferredId != null && preferredId > 0L) {
+      val explicit = writableCalendars.firstOrNull { it.id == preferredId }
+      if (explicit != null) return explicit.id
+    }
+    return writableCalendars.firstOrNull { it.id in enabledDeviceCalendarIds && it.isPrimary }?.id
+      ?: writableCalendars.firstOrNull { it.id in enabledDeviceCalendarIds }?.id
+      ?: writableCalendars.firstOrNull { it.isPrimary }?.id
+      ?: writableCalendars.first().id
+  }
+
+  /**
+   * Converts UTC midnight all-day `[beginUtcMillis, endUtcMillis)` timestamps from Android's
+   * [CalendarContract] into local [CalendarDay] start/end-of-day timestamps so timezones west or east
+   * of UTC never shift all-day events onto the wrong date.
+   */
+  fun utcAllDayRangeToLocalMillis(
+    beginUtcMillis: Long,
+    endUtcMillis: Long,
+  ): Pair<Long, Long> {
+    val utcZone = TimeZone.getTimeZone("UTC")
+    val startCal = Calendar.getInstance(utcZone).apply { timeInMillis = beginUtcMillis }
+    val startDay = CalendarDay(
+      year = startCal.get(Calendar.YEAR),
+      month = startCal.get(Calendar.MONTH) + 1,
+      dayOfMonth = startCal.get(Calendar.DAY_OF_MONTH),
+    )
+    val inclusiveEndUtc = maxOf(beginUtcMillis, endUtcMillis - 1L)
+    val endCal = Calendar.getInstance(utcZone).apply { timeInMillis = inclusiveEndUtc }
+    val rawEndDay = CalendarDay(
+      year = endCal.get(Calendar.YEAR),
+      month = endCal.get(Calendar.MONTH) + 1,
+      dayOfMonth = endCal.get(Calendar.DAY_OF_MONTH),
+    )
+    val endDay = maxOf(startDay, rawEndDay)
+    return startDay.toStartOfDayMillis() to endDay.toEndOfDayMillis()
+  }
+
+  /**
+   * Converts local [startDay]..[endDay] into UTC midnight `[dtStartUtc, dtEndExclusiveUtc)` timestamps
+   * as required by Android's [CalendarContract.Events] when `ALL_DAY = 1`.
+   */
+  fun localAllDayToUtcRangeMillis(
+    startDay: CalendarDay,
+    endDay: CalendarDay = startDay,
+  ): Pair<Long, Long> {
+    val utcZone = TimeZone.getTimeZone("UTC")
+    val safeEnd = maxOf(startDay, endDay)
+    val nextDay = safeEnd.plusDays(1)
+    val startUtc = Calendar.getInstance(utcZone).apply {
+      clear()
+      set(startDay.year, (startDay.month - 1).coerceIn(0, 11), startDay.dayOfMonth, 0, 0, 0)
+    }.timeInMillis
+    val endUtc = Calendar.getInstance(utcZone).apply {
+      clear()
+      set(nextDay.year, (nextDay.month - 1).coerceIn(0, 11), nextDay.dayOfMonth, 0, 0, 0)
+    }.timeInMillis
+    return startUtc to endUtc
+  }
+
+  fun toRruleString(recurrence: CalendarRecurrence): String? {
+    return when (recurrence) {
+      CalendarRecurrence.NONE -> null
+      CalendarRecurrence.DAILY -> "FREQ=DAILY"
+      CalendarRecurrence.WEEKLY -> "FREQ=WEEKLY"
+      CalendarRecurrence.BIWEEKLY -> "FREQ=WEEKLY;INTERVAL=2"
+      CalendarRecurrence.WEEKDAYS -> "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+      CalendarRecurrence.MONTHLY -> "FREQ=MONTHLY"
+      CalendarRecurrence.YEARLY -> "FREQ=YEARLY"
+    }
+  }
+
+  fun fromRruleString(rrule: String?): CalendarRecurrence {
+    if (rrule.isNullOrBlank()) return CalendarRecurrence.NONE
+    return when {
+      rrule.contains("BYDAY=MO,TU,WE,TH,FR", ignoreCase = true) -> CalendarRecurrence.WEEKDAYS
+      rrule.contains("FREQ=DAILY", ignoreCase = true) -> CalendarRecurrence.DAILY
+      rrule.contains("FREQ=WEEKLY", ignoreCase = true) && rrule.contains("INTERVAL=2", ignoreCase = true) ->
+        CalendarRecurrence.BIWEEKLY
+      rrule.contains("FREQ=WEEKLY", ignoreCase = true) -> CalendarRecurrence.WEEKLY
+      rrule.contains("FREQ=MONTHLY", ignoreCase = true) -> CalendarRecurrence.MONTHLY
+      rrule.contains("FREQ=YEARLY", ignoreCase = true) -> CalendarRecurrence.YEARLY
+      else -> CalendarRecurrence.NONE
+    }
+  }
+
+  /**
+   * Formats an RFC 5545 `DURATION` value (`P<n>D` for all-day events or `PT<s>S` for timed events)
+   * required by Android's [CalendarContract.Events] whenever `RRULE` is non-null.
+   */
+  fun formatRfc5545Duration(
+    startMillis: Long,
+    endMillis: Long,
+    isAllDay: Boolean,
+  ): String {
+    return if (isAllDay) {
+      val sDay = CalendarDay.fromMillis(startMillis)
+      val eDay = CalendarDay.fromMillis(maxOf(startMillis, endMillis - 1L))
+      val days = (daysBetween(sDay, eDay) + 1).coerceAtLeast(1)
+      "P${days}D"
+    } else {
+      val seconds = ((maxOf(startMillis + 900_000L, endMillis) - startMillis) / 1000L).coerceAtLeast(900L)
+      "PT${seconds}S"
+    }
+  }
+
+  fun inferCategoryForDeviceCalendar(
+    calendarName: String,
+    title: String = "",
+  ): CalendarCategory {
+    val combined = "${calendarName.lowercase(Locale.ROOT)} ${title.lowercase(Locale.ROOT)}"
+    return when {
+      combined.contains("birthday") -> CalendarCategory.BIRTHDAYS
+      combined.contains("holiday") || combined.contains("observance") -> CalendarCategory.HOLIDAYS
+      combined.contains("work") || combined.contains("office") -> CalendarCategory.WORK
+      combined.contains("health") || combined.contains("fitness") || combined.contains("workout") ->
+        CalendarCategory.HEALTH
+      combined.contains("travel") || combined.contains("flight") || combined.contains("trip") ->
+        CalendarCategory.TRAVEL
+      else -> CalendarCategory.PERSONAL
+    }
   }
 
   /**
@@ -1710,6 +2077,621 @@ class CalendarAlarmReceiver : BroadcastReceiver() {
           CalendarNotificationHelper.scheduleEventAlarm(context, eventToNotify)
         }
       }
+    }
+  }
+}
+
+/**
+ * Helper for querying, inserting, updating, and deleting events in Android's system
+ * [CalendarContract] provider (`READ_CALENDAR` / `WRITE_CALENDAR`), bridged with [AppPermission.CALENDAR].
+ */
+object DeviceCalendarHelper {
+
+  private val CALENDARS_PROJECTION = arrayOf(
+    CalendarContract.Calendars._ID,
+    CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+    CalendarContract.Calendars.ACCOUNT_NAME,
+    CalendarContract.Calendars.ACCOUNT_TYPE,
+    CalendarContract.Calendars.OWNER_ACCOUNT,
+    CalendarContract.Calendars.CALENDAR_COLOR,
+    CalendarContract.Calendars.VISIBLE,
+    CalendarContract.Calendars.IS_PRIMARY,
+    CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
+  )
+
+  private val INSTANCES_PROJECTION = arrayOf(
+    CalendarContract.Instances.EVENT_ID,
+    CalendarContract.Instances.CALENDAR_ID,
+    CalendarContract.Instances.TITLE,
+    CalendarContract.Instances.DESCRIPTION,
+    CalendarContract.Instances.EVENT_LOCATION,
+    CalendarContract.Instances.BEGIN,
+    CalendarContract.Instances.END,
+    CalendarContract.Instances.ALL_DAY,
+    CalendarContract.Instances.DISPLAY_COLOR,
+    CalendarContract.Instances.CALENDAR_COLOR,
+    CalendarContract.Instances.RRULE,
+    CalendarContract.Instances.HAS_ALARM,
+    CalendarContract.Instances.STATUS,
+  )
+
+  @Volatile
+  private var lastRecordedReadUsageMs: Long = 0L
+
+  fun hasOsReadPermission(context: Context): Boolean {
+    return try {
+      ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.READ_CALENDAR,
+      ) == PackageManager.PERMISSION_GRANTED
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  fun hasOsWritePermission(context: Context): Boolean {
+    return try {
+      ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.WRITE_CALENDAR,
+      ) == PackageManager.PERMISSION_GRANTED
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  fun hasReadPermission(context: Context): Boolean {
+    return NavigationPreferencesBridge.isPermissionGranted(AppPermission.CALENDAR) &&
+      hasOsReadPermission(context)
+  }
+
+  fun hasWritePermission(context: Context): Boolean {
+    return NavigationPreferencesBridge.isPermissionGranted(AppPermission.CALENDAR) &&
+      hasOsWritePermission(context)
+  }
+
+  private fun recordUsageThrottled(
+    tool: Tool = Tool.CALENDAR,
+    force: Boolean = false,
+  ) {
+    val now = System.currentTimeMillis()
+    if (!force && now - lastRecordedReadUsageMs < 15_000L) return
+    lastRecordedReadUsageMs = now
+    NavigationPreferencesBridge.activeRepository?.recordPermissionUsage(
+      AppPermission.CALENDAR,
+      tool,
+    )
+  }
+
+  /**
+   * Queries all non-deleted calendars registered on the device via [CalendarContract.Calendars].
+   */
+  fun queryDeviceCalendars(
+    context: Context,
+    recordUsage: Boolean = true,
+    tool: Tool = Tool.CALENDAR,
+  ): List<DeviceCalendarInfo> {
+    if (!hasReadPermission(context)) return emptyList()
+    return try {
+      val results = mutableListOf<DeviceCalendarInfo>()
+      val selection = "${CalendarContract.Calendars.DELETED} = 0"
+      context.contentResolver.query(
+        CalendarContract.Calendars.CONTENT_URI,
+        CALENDARS_PROJECTION,
+        selection,
+        null,
+        null,
+      )?.use { cursor ->
+        val idIdx = cursor.getColumnIndex(CalendarContract.Calendars._ID)
+        val nameIdx = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME)
+        val accNameIdx = cursor.getColumnIndex(CalendarContract.Calendars.ACCOUNT_NAME)
+        val accTypeIdx = cursor.getColumnIndex(CalendarContract.Calendars.ACCOUNT_TYPE)
+        val ownerIdx = cursor.getColumnIndex(CalendarContract.Calendars.OWNER_ACCOUNT)
+        val colorIdx = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_COLOR)
+        val visIdx = cursor.getColumnIndex(CalendarContract.Calendars.VISIBLE)
+        val primIdx = cursor.getColumnIndex(CalendarContract.Calendars.IS_PRIMARY)
+        val accessIdx = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL)
+
+        while (cursor.moveToNext()) {
+          if (idIdx < 0) continue
+          val id = cursor.getLong(idIdx)
+          val rawName = if (nameIdx >= 0 && !cursor.isNull(nameIdx)) cursor.getString(nameIdx).orEmpty().trim() else ""
+          val accName = if (accNameIdx >= 0 && !cursor.isNull(accNameIdx)) cursor.getString(accNameIdx).orEmpty().trim() else ""
+          val accType = if (accTypeIdx >= 0 && !cursor.isNull(accTypeIdx)) cursor.getString(accTypeIdx).orEmpty().trim() else ""
+          val owner = if (ownerIdx >= 0 && !cursor.isNull(ownerIdx)) cursor.getString(ownerIdx).orEmpty().trim() else ""
+          val colorArgb = if (colorIdx >= 0 && !cursor.isNull(colorIdx)) {
+            cursor.getInt(colorIdx) or 0xFF000000.toInt()
+          } else {
+            0xFF039BE5.toInt()
+          }
+          val isVisible = if (visIdx >= 0 && !cursor.isNull(visIdx)) cursor.getInt(visIdx) != 0 else true
+          val isPrimary = if (primIdx >= 0 && !cursor.isNull(primIdx)) cursor.getInt(primIdx) != 0 else false
+          val accessLevel = if (accessIdx >= 0 && !cursor.isNull(accessIdx)) {
+            cursor.getInt(accessIdx)
+          } else {
+            CalendarContract.Calendars.CAL_ACCESS_READ
+          }
+          val displayName = rawName.ifBlank { accName.ifBlank { "Calendar $id" } }
+
+          results.add(
+            DeviceCalendarInfo(
+              id = id,
+              displayName = displayName,
+              accountName = accName,
+              accountType = accType,
+              ownerAccount = owner,
+              colorArgb = colorArgb,
+              isVisible = isVisible,
+              isPrimary = isPrimary,
+              accessLevel = accessLevel,
+            )
+          )
+        }
+      }
+      if (recordUsage) {
+        recordUsageThrottled(tool = tool)
+      }
+      results.sortedWith(
+        compareByDescending<DeviceCalendarInfo> { it.isPrimary }
+          .thenByDescending { it.isWritable }
+          .thenBy { it.displayName.lowercase(Locale.ROOT) }
+      )
+    } catch (_: Throwable) {
+      emptyList()
+    }
+  }
+
+  private fun queryReminderMinutesByEventId(
+    context: Context,
+    eventIds: Set<Long>,
+  ): Map<Long, Int> {
+    if (eventIds.isEmpty()) return emptyMap()
+    val result = mutableMapOf<Long, Int>()
+    try {
+      // Chunk IN clauses safely under SQLite's parameter limit
+      for (chunk in eventIds.chunked(250)) {
+        val idList = chunk.joinToString(",")
+        val selection = "${CalendarContract.Reminders.EVENT_ID} IN ($idList) AND " +
+          "(${CalendarContract.Reminders.METHOD} = ${CalendarContract.Reminders.METHOD_ALERT} OR " +
+          "${CalendarContract.Reminders.METHOD} = ${CalendarContract.Reminders.METHOD_DEFAULT})"
+        context.contentResolver.query(
+          CalendarContract.Reminders.CONTENT_URI,
+          arrayOf(CalendarContract.Reminders.EVENT_ID, CalendarContract.Reminders.MINUTES),
+          selection,
+          null,
+          null,
+        )?.use { cursor ->
+          val evIdx = cursor.getColumnIndex(CalendarContract.Reminders.EVENT_ID)
+          val minIdx = cursor.getColumnIndex(CalendarContract.Reminders.MINUTES)
+          while (cursor.moveToNext()) {
+            if (evIdx < 0 || minIdx < 0 || cursor.isNull(minIdx)) continue
+            val evId = cursor.getLong(evIdx)
+            val minutes = cursor.getInt(minIdx).coerceAtLeast(0)
+            val existing = result[evId]
+            if (existing == null || minutes < existing) {
+              result[evId] = minutes
+            }
+          }
+        }
+      }
+    } catch (_: Throwable) {}
+    return result
+  }
+
+  /**
+   * Queries expanded event occurrences from [CalendarContract.Instances] across `[rangeStartMillis, rangeEndMillis]`
+   * for the specified [enabledCalendarIds].
+   */
+  fun queryEventsInRange(
+    context: Context,
+    rangeStartMillis: Long,
+    rangeEndMillis: Long,
+    calendarsById: Map<Long, DeviceCalendarInfo>,
+    enabledCalendarIds: Set<Long>,
+    favoriteKeys: Set<String> = emptySet(),
+    recordUsage: Boolean = false,
+    tool: Tool = Tool.CALENDAR,
+  ): List<CalendarEvent> {
+    if (enabledCalendarIds.isEmpty() || rangeEndMillis < rangeStartMillis || !hasReadPermission(context)) {
+      return emptyList()
+    }
+    return try {
+      data class RawInstance(
+        val eventId: Long,
+        val calendarId: Long,
+        val title: String,
+        val description: String,
+        val location: String,
+        val startMillis: Long,
+        val endMillis: Long,
+        val isAllDay: Boolean,
+        val displayColorArgb: Int,
+        val rrule: String?,
+        val hasAlarm: Boolean,
+      )
+
+      val rawInstances = mutableListOf<RawInstance>()
+      val alarmEventIds = mutableSetOf<Long>()
+
+      CalendarContract.Instances.query(
+        context.contentResolver,
+        INSTANCES_PROJECTION,
+        rangeStartMillis,
+        rangeEndMillis,
+      )?.use { cursor ->
+        val evIdIdx = cursor.getColumnIndex(CalendarContract.Instances.EVENT_ID)
+        val calIdIdx = cursor.getColumnIndex(CalendarContract.Instances.CALENDAR_ID)
+        val titleIdx = cursor.getColumnIndex(CalendarContract.Instances.TITLE)
+        val descIdx = cursor.getColumnIndex(CalendarContract.Instances.DESCRIPTION)
+        val locIdx = cursor.getColumnIndex(CalendarContract.Instances.EVENT_LOCATION)
+        val beginIdx = cursor.getColumnIndex(CalendarContract.Instances.BEGIN)
+        val endIdx = cursor.getColumnIndex(CalendarContract.Instances.END)
+        val allDayIdx = cursor.getColumnIndex(CalendarContract.Instances.ALL_DAY)
+        val dispColorIdx = cursor.getColumnIndex(CalendarContract.Instances.DISPLAY_COLOR)
+        val calColorIdx = cursor.getColumnIndex(CalendarContract.Instances.CALENDAR_COLOR)
+        val rruleIdx = cursor.getColumnIndex(CalendarContract.Instances.RRULE)
+        val alarmIdx = cursor.getColumnIndex(CalendarContract.Instances.HAS_ALARM)
+        val statusIdx = cursor.getColumnIndex(CalendarContract.Instances.STATUS)
+
+        while (cursor.moveToNext()) {
+          if (evIdIdx < 0 || calIdIdx < 0 || beginIdx < 0) continue
+          val calendarId = cursor.getLong(calIdIdx)
+          if (calendarId !in enabledCalendarIds) continue
+          val status = if (statusIdx >= 0 && !cursor.isNull(statusIdx)) cursor.getInt(statusIdx) else 0
+          if (status == CalendarContract.Events.STATUS_CANCELED) continue
+
+          val eventId = cursor.getLong(evIdIdx)
+          val rawTitle = if (titleIdx >= 0 && !cursor.isNull(titleIdx)) cursor.getString(titleIdx).orEmpty().trim() else ""
+          val title = rawTitle.ifBlank { "(No title)" }
+          val desc = if (descIdx >= 0 && !cursor.isNull(descIdx)) cursor.getString(descIdx).orEmpty().trim() else ""
+          val loc = if (locIdx >= 0 && !cursor.isNull(locIdx)) cursor.getString(locIdx).orEmpty().trim() else ""
+          val rawBegin = cursor.getLong(beginIdx)
+          val isAllDay = allDayIdx >= 0 && !cursor.isNull(allDayIdx) && cursor.getInt(allDayIdx) != 0
+          val rawEnd = if (endIdx >= 0 && !cursor.isNull(endIdx)) {
+            cursor.getLong(endIdx)
+          } else {
+            rawBegin + if (isAllDay) 86_400_000L else 3_600_000L
+          }
+          val (localStart, localEnd) = if (isAllDay) {
+            CalendarEngine.utcAllDayRangeToLocalMillis(rawBegin, maxOf(rawBegin + 1L, rawEnd))
+          } else {
+            rawBegin to maxOf(rawBegin, rawEnd)
+          }
+
+          val calInfo = calendarsById[calendarId]
+          val dispColor = when {
+            dispColorIdx >= 0 && !cursor.isNull(dispColorIdx) -> cursor.getInt(dispColorIdx) or 0xFF000000.toInt()
+            calColorIdx >= 0 && !cursor.isNull(calColorIdx) -> cursor.getInt(calColorIdx) or 0xFF000000.toInt()
+            calInfo != null -> calInfo.colorArgb
+            else -> 0xFF039BE5.toInt()
+          }
+          val rrule = if (rruleIdx >= 0 && !cursor.isNull(rruleIdx)) cursor.getString(rruleIdx) else null
+          val hasAlarm = alarmIdx >= 0 && !cursor.isNull(alarmIdx) && cursor.getInt(alarmIdx) != 0
+          if (hasAlarm) {
+            alarmEventIds.add(eventId)
+          }
+
+          rawInstances.add(
+            RawInstance(
+              eventId = eventId,
+              calendarId = calendarId,
+              title = title,
+              description = desc,
+              location = loc,
+              startMillis = localStart,
+              endMillis = localEnd,
+              isAllDay = isAllDay,
+              displayColorArgb = dispColor,
+              rrule = rrule,
+              hasAlarm = hasAlarm,
+            )
+          )
+        }
+      }
+
+      val reminderMinutesMap = queryReminderMinutesByEventId(context, alarmEventIds)
+      if (recordUsage) {
+        recordUsageThrottled(tool = tool)
+      }
+
+      rawInstances.map { inst ->
+        val calInfo = calendarsById[inst.calendarId]
+        val calName = calInfo?.displayName ?: "Device Calendar"
+        val category = CalendarEngine.inferCategoryForDeviceCalendar(calName, inst.title)
+        val swatch = CalendarEventColor.closestToArgb(inst.displayColorArgb)
+        val reminderMins = if (inst.hasAlarm) {
+          reminderMinutesMap[inst.eventId] ?: CalendarReminderOption.THIRTY_MINUTES.minutesBefore
+        } else {
+          CalendarReminderOption.NONE.minutesBefore
+        }
+        val favKey = "device_ev_${inst.calendarId}_${inst.eventId}"
+        CalendarEvent(
+          id = "device_cal_${inst.calendarId}_ev_${inst.eventId}_${inst.startMillis}",
+          title = inst.title,
+          description = inst.description,
+          location = inst.location,
+          startMillis = inst.startMillis,
+          endMillis = inst.endMillis,
+          isAllDay = inst.isAllDay,
+          category = category,
+          color = swatch,
+          recurrence = CalendarEngine.fromRruleString(inst.rrule),
+          reminderMinutesBefore = reminderMins,
+          isFavorite = favKey in favoriteKeys,
+          deviceCalendarId = inst.calendarId,
+          deviceEventId = inst.eventId,
+          deviceCalendarName = calName,
+          deviceAccountName = calInfo?.accountName.orEmpty(),
+          deviceCalendarColorArgb = calInfo?.colorArgb ?: inst.displayColorArgb,
+          isDeviceEventWritable = calInfo?.isWritable ?: false,
+          isPreExpandedInstance = true,
+        )
+      }
+    } catch (_: Throwable) {
+      emptyList()
+    }
+  }
+
+  /**
+   * Convenience helper for [CalendarWidgets] and [SearchEngine] that loads all enabled device calendar
+   * events across [years].
+   */
+  fun queryEventsForYears(
+    context: Context,
+    years: Set<Int>,
+    repository: CalendarRepository?,
+    tool: Tool = Tool.CALENDAR,
+  ): List<CalendarEvent> {
+    if (years.isEmpty()) return emptyList()
+    if (repository?.getSyncDeviceCalendars() == false) return emptyList()
+    if (!hasReadPermission(context)) return emptyList()
+
+    val calendars = queryDeviceCalendars(context, recordUsage = false, tool = tool)
+    if (calendars.isEmpty()) return emptyList()
+    val enabledIds = CalendarEngine.resolveActiveDeviceCalendarIds(
+      availableCalendars = calendars,
+      storedEnabledIds = repository?.getEnabledDeviceCalendarIds(),
+    )
+    if (enabledIds.isEmpty()) return emptyList()
+
+    val minYear = years.minOrNull() ?: return emptyList()
+    val maxYear = years.maxOrNull() ?: minYear
+    // Include a 7-day buffer on both ends so week/month grids and UTC all-day offsets are always covered
+    val rangeStart = CalendarDay(minYear, 1, 1).plusDays(-7).toStartOfDayMillis()
+    val rangeEnd = CalendarDay(maxYear, 12, 31).plusDays(7).toEndOfDayMillis()
+    return queryEventsInRange(
+      context = context,
+      rangeStartMillis = rangeStart,
+      rangeEndMillis = rangeEnd,
+      calendarsById = calendars.associateBy { it.id },
+      enabledCalendarIds = enabledIds,
+      favoriteKeys = repository?.getFavoriteEventKeys().orEmpty(),
+      recordUsage = true,
+      tool = tool,
+    )
+  }
+
+  private fun resolveMatchingAccountColorKey(
+    context: Context,
+    calendar: DeviceCalendarInfo,
+    desiredSwatch: CalendarEventColor,
+  ): String? {
+    if (calendar.accountName.isBlank() || calendar.accountType.isBlank()) return null
+    return try {
+      val selection = "${CalendarContract.Colors.ACCOUNT_NAME} = ? AND " +
+        "${CalendarContract.Colors.ACCOUNT_TYPE} = ? AND " +
+        "${CalendarContract.Colors.COLOR_TYPE} = ${CalendarContract.Colors.TYPE_EVENT}"
+      val args = arrayOf(calendar.accountName, calendar.accountType)
+      var bestKey: String? = null
+      var bestDistance = Int.MAX_VALUE
+      val targetRgb = desiredSwatch.hex.removePrefix("#").toIntOrNull(16) ?: return null
+      val tr = (targetRgb shr 16) and 0xFF
+      val tg = (targetRgb shr 8) and 0xFF
+      val tb = targetRgb and 0xFF
+
+      context.contentResolver.query(
+        CalendarContract.Colors.CONTENT_URI,
+        arrayOf(CalendarContract.Colors.COLOR_KEY, CalendarContract.Colors.COLOR),
+        selection,
+        args,
+        null,
+      )?.use { cursor ->
+        val keyIdx = cursor.getColumnIndex(CalendarContract.Colors.COLOR_KEY)
+        val colIdx = cursor.getColumnIndex(CalendarContract.Colors.COLOR)
+        while (cursor.moveToNext()) {
+          if (keyIdx < 0 || colIdx < 0 || cursor.isNull(keyIdx) || cursor.isNull(colIdx)) continue
+          val key = cursor.getString(keyIdx) ?: continue
+          val c = cursor.getInt(colIdx)
+          val dr = ((c shr 16) and 0xFF) - tr
+          val dg = ((c shr 8) and 0xFF) - tg
+          val db = (c and 0xFF) - tb
+          val dist = dr * dr + dg * dg + db * db
+          if (dist < bestDistance) {
+            bestDistance = dist
+            bestKey = key
+          }
+        }
+      }
+      bestKey
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  private fun buildEventContentValues(
+    context: Context,
+    event: CalendarEvent,
+    targetCalendar: DeviceCalendarInfo,
+    includeCustomColorKey: Boolean = true,
+  ): ContentValues {
+    val rrule = CalendarEngine.toRruleString(event.recurrence)
+    return ContentValues().apply {
+      put(CalendarContract.Events.CALENDAR_ID, targetCalendar.id)
+      put(CalendarContract.Events.TITLE, event.title.trim())
+      put(CalendarContract.Events.DESCRIPTION, event.description.trim())
+      put(CalendarContract.Events.EVENT_LOCATION, event.location.trim())
+      put(CalendarContract.Events.ALL_DAY, if (event.isAllDay) 1 else 0)
+      put(CalendarContract.Events.HAS_ALARM, if (event.reminderMinutesBefore >= 0) 1 else 0)
+
+      if (event.isAllDay) {
+        val (utcStart, utcEnd) = CalendarEngine.localAllDayToUtcRangeMillis(event.startDay, event.endDay)
+        put(CalendarContract.Events.DTSTART, utcStart)
+        put(CalendarContract.Events.EVENT_TIMEZONE, "UTC")
+        if (rrule != null) {
+          put(CalendarContract.Events.RRULE, rrule)
+          put(
+            CalendarContract.Events.DURATION,
+            CalendarEngine.formatRfc5545Duration(event.startMillis, event.endMillis, isAllDay = true),
+          )
+          putNull(CalendarContract.Events.DTEND)
+        } else {
+          put(CalendarContract.Events.DTEND, utcEnd)
+          putNull(CalendarContract.Events.DURATION)
+          putNull(CalendarContract.Events.RRULE)
+        }
+      } else {
+        val safeEnd = maxOf(event.startMillis + 900_000L, event.endMillis)
+        put(CalendarContract.Events.DTSTART, event.startMillis)
+        put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+        if (rrule != null) {
+          put(CalendarContract.Events.RRULE, rrule)
+          put(
+            CalendarContract.Events.DURATION,
+            CalendarEngine.formatRfc5545Duration(event.startMillis, safeEnd, isAllDay = false),
+          )
+          putNull(CalendarContract.Events.DTEND)
+        } else {
+          put(CalendarContract.Events.DTEND, safeEnd)
+          putNull(CalendarContract.Events.DURATION)
+          putNull(CalendarContract.Events.RRULE)
+        }
+      }
+
+      if (includeCustomColorKey && event.color != targetCalendar.closestSwatch) {
+        val colorKey = resolveMatchingAccountColorKey(context, targetCalendar, event.color)
+        if (!colorKey.isNullOrBlank()) {
+          put(CalendarContract.Events.EVENT_COLOR_KEY, colorKey)
+        }
+      }
+    }
+  }
+
+  private fun syncRemindersForDeviceEvent(
+    context: Context,
+    eventId: Long,
+    reminderMinutesBefore: Int,
+  ) {
+    try {
+      context.contentResolver.delete(
+        CalendarContract.Reminders.CONTENT_URI,
+        "${CalendarContract.Reminders.EVENT_ID} = ?",
+        arrayOf(eventId.toString()),
+      )
+      if (reminderMinutesBefore >= 0) {
+        val values = ContentValues().apply {
+          put(CalendarContract.Reminders.EVENT_ID, eventId)
+          put(CalendarContract.Reminders.MINUTES, reminderMinutesBefore)
+          put(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT)
+        }
+        context.contentResolver.insert(CalendarContract.Reminders.CONTENT_URI, values)
+      }
+    } catch (_: Throwable) {}
+  }
+
+  /**
+   * Inserts a new event into [targetCalendar] via [CalendarContract.Events] and returns its system `eventId`,
+   * or `null` if permissions are missing or the provider rejected the insert.
+   */
+  fun insertDeviceEvent(
+    context: Context,
+    event: CalendarEvent,
+    targetCalendar: DeviceCalendarInfo,
+  ): Long? {
+    if (!hasWritePermission(context) || !targetCalendar.isWritable) return null
+    return try {
+      val uri = try {
+        context.contentResolver.insert(
+          CalendarContract.Events.CONTENT_URI,
+          buildEventContentValues(context, event, targetCalendar, includeCustomColorKey = true),
+        )
+      } catch (_: IllegalArgumentException) {
+        // Fallback without EVENT_COLOR_KEY for providers that disallow custom event colors
+        context.contentResolver.insert(
+          CalendarContract.Events.CONTENT_URI,
+          buildEventContentValues(context, event, targetCalendar, includeCustomColorKey = false),
+        )
+      } ?: return null
+      val newId = ContentUris.parseId(uri).takeIf { it > 0L } ?: return null
+      syncRemindersForDeviceEvent(context, newId, event.reminderMinutesBefore)
+      recordUsageThrottled(force = true)
+      newId
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Updates an existing device calendar event (`eventId`) in [targetCalendar].
+   * If the user moved the event to a different device calendar, inserts into [targetCalendar] and
+   * removes the original event so cross-account moves succeed reliably.
+   */
+  fun updateDeviceEvent(
+    context: Context,
+    existingEventId: Long,
+    existingCalendarId: Long?,
+    updatedEvent: CalendarEvent,
+    targetCalendar: DeviceCalendarInfo,
+  ): Long? {
+    if (!hasWritePermission(context) || !targetCalendar.isWritable) return null
+    if (existingCalendarId != null && existingCalendarId != targetCalendar.id) {
+      val newId = insertDeviceEvent(context, updatedEvent, targetCalendar) ?: return null
+      deleteDeviceEvent(context, existingEventId)
+      return newId
+    }
+    return try {
+      val eventUri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, existingEventId)
+      val rows = try {
+        context.contentResolver.update(
+          eventUri,
+          buildEventContentValues(context, updatedEvent, targetCalendar, includeCustomColorKey = true),
+          null,
+          null,
+        )
+      } catch (_: IllegalArgumentException) {
+        context.contentResolver.update(
+          eventUri,
+          buildEventContentValues(context, updatedEvent, targetCalendar, includeCustomColorKey = false),
+          null,
+          null,
+        )
+      }
+      if (rows >= 0) {
+        syncRemindersForDeviceEvent(context, existingEventId, updatedEvent.reminderMinutesBefore)
+        recordUsageThrottled(force = true)
+        existingEventId
+      } else {
+        null
+      }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Deletes an event (`deviceEventId`) from Android's [CalendarContract.Events] provider.
+   */
+  fun deleteDeviceEvent(
+    context: Context,
+    deviceEventId: Long,
+  ): Boolean {
+    if (!hasWritePermission(context)) return false
+    return try {
+      val eventUri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, deviceEventId)
+      val deleted = context.contentResolver.delete(eventUri, null, null)
+      recordUsageThrottled(force = true)
+      deleted > 0
+    } catch (_: Throwable) {
+      false
     }
   }
 }

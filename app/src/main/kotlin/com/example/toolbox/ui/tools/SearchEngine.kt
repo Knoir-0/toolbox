@@ -120,6 +120,7 @@ data class SearchDataSources(
   val notesRepository: NotesRepository? = null,
   val todoListRepository: TodoListRepository? = null,
   val calendarRepository: CalendarRepository? = null,
+  val deviceCalendarEvents: List<CalendarEvent> = emptyList(),
   val recipeBookRepository: RecipeBookRepository? = null,
   val plantScheduleRepository: PlantScheduleRepository? = null,
   val hiddenTools: Set<Tool> = emptySet(),
@@ -478,10 +479,19 @@ object SearchEngine {
     hiddenTools: Set<Tool> = emptySet(),
     usageCounts: Map<Tool, Int> = emptyMap(),
   ): SearchDataSources {
+    val calRepo = SharedPreferencesCalendarRepository(context)
+    val currentYear = CalendarDay.today().year
+    val deviceEvents = DeviceCalendarHelper.queryEventsForYears(
+      context = context,
+      years = setOf(currentYear, currentYear + 1),
+      repository = calRepo,
+      tool = Tool.SEARCH,
+    )
     return SearchDataSources(
       notesRepository = SharedPreferencesNotesRepository(context),
       todoListRepository = SharedPreferencesTodoListRepository(context),
-      calendarRepository = SharedPreferencesCalendarRepository(context),
+      calendarRepository = calRepo,
+      deviceCalendarEvents = deviceEvents,
       recipeBookRepository = SharedPreferencesRecipeBookRepository(context),
       plantScheduleRepository = SharedPreferencesPlantScheduleRepository(context),
       hiddenTools = hiddenTools,
@@ -543,7 +553,14 @@ object SearchEngine {
     // 3. Persisted User Data (Notes, To-Do Tasks, Calendar Events, Saved/Custom Recipes, Scheduled/Custom Plants)
     allResults.addAll(searchUserNotes(normalizedQuery, tokens, dataSources.notesRepository))
     allResults.addAll(searchUserTodos(normalizedQuery, tokens, dataSources.todoListRepository))
-    allResults.addAll(searchCalendarEvents(normalizedQuery, tokens, dataSources.calendarRepository))
+    allResults.addAll(
+      searchCalendarEvents(
+        normalizedQuery = normalizedQuery,
+        tokens = tokens,
+        calendarRepository = dataSources.calendarRepository,
+        deviceCalendarEvents = dataSources.deviceCalendarEvents,
+      )
+    )
 
     // 4. Built-in + User Catalogs across all tools
     allResults.addAll(searchRecipes(normalizedQuery, tokens, dataSources.recipeBookRepository))
@@ -1284,11 +1301,19 @@ object SearchEngine {
     normalizedQuery: String,
     tokens: List<String>,
     calendarRepository: CalendarRepository?,
+    deviceCalendarEvents: List<CalendarEvent> = emptyList(),
   ): List<SearchResultItem> {
     val userEvents = calendarRepository?.loadEvents().orEmpty()
     val currentYear = CalendarDay.today().year
     val holidays = CalendarEngine.builtInHolidaysForYear(currentYear)
-    val allEvents = (userEvents + holidays).distinctBy { it.id }
+    val deduplicatedDeviceEvents = deviceCalendarEvents.distinctBy { ev ->
+      if (ev.isDeviceCalendarEvent && ev.recurrence != CalendarRecurrence.NONE) {
+        "${ev.deviceCalendarId}_${ev.deviceEventId}"
+      } else {
+        ev.id
+      }
+    }
+    val allEvents = (userEvents + deduplicatedDeviceEvents + holidays).distinctBy { it.id }
 
     return allEvents.mapNotNull { event ->
       val dateText = CalendarEngine.formatDayHeader(event.startDay)
@@ -1297,7 +1322,7 @@ object SearchEngine {
         normalizedQuery = normalizedQuery,
         tokens = tokens,
         primaryText = event.title,
-        secondaryText = "${event.description} ${event.location} ${event.category.displayName}",
+        secondaryText = "${event.description} ${event.location} ${event.calendarSourceLabel} ${event.deviceAccountName.orEmpty()}",
         keywordsText = "$dateText $timeText ${event.color.displayName} calendar event schedule holiday",
         baseWeight = if (event.isBuiltInHoliday) 130 else 160,
       )
@@ -1306,7 +1331,7 @@ object SearchEngine {
       SearchResultItem(
         id = "calendar_event_${event.id}",
         title = event.title,
-        subtitle = "${event.category.displayName} • $dateText • $timeText",
+        subtitle = "${event.calendarSourceLabel} • $dateText • $timeText",
         snippet = event.description.ifBlank {
           if (event.location.isNotBlank()) "Location: ${event.location}" else "Scheduled in ${Tool.CALENDAR.title}"
         },

@@ -1958,7 +1958,7 @@ fun GalleryScreen(
         }
       }
 
-      // Main Content Area (Tile View with pinch-to-zoom 2..5 per row <-> List View, or Scoped Storage Permission / Locked View)
+      // Main Content Area (Tile View with pinch-to-zoom 2..5 per row <-> List View, Horizontally Paginated across Pills)
       PullToRefreshBox(
         isRefreshing = false,
         onRefresh = { triggerPullRefresh() },
@@ -1969,39 +1969,6 @@ fun GalleryScreen(
           .nestedScroll(pullNestedScrollConnection)
           .testTag("gallery_pull_to_refresh")
           .testTag("gallery_content_container")
-          .then(
-            if (isGallerySearchView) {
-              Modifier.swipeToSwitchPillView(
-                items = gallerySearchTagOptions,
-                selectedItem = activeGallerySearchTagOption,
-                enabled = gallerySearchTagOptions.size > 1,
-                onSelectItem = { tag ->
-                  selectedTagFilter = tag
-                },
-              )
-            } else {
-              Modifier.swipeToSwitchPillView(
-                items = galleryRootPillIndices,
-                selectedItem = activeGalleryRootPillIndex,
-                enabled = !isSelectionMode && albumStack.isEmpty() && galleryRootPillIndices.size > 1,
-                onSelectItem = { pillIdx ->
-                  if (pillIdx <= 0) {
-                    isFabExpanded = false
-                    exitSelectionMode()
-                    navigatedToRootFromInitial = true
-                    pendingPermissionFolderPath = null
-                    selectedDefaultFolder = null
-                    albumStack.clear()
-                  } else {
-                    val folder = folderPills.getOrNull(pillIdx - 1)
-                    if (folder != null) {
-                      handleFolderPillTap(folder)
-                    }
-                  }
-                },
-              )
-            }
-          )
           .pinchToChangeColumns(
             enabled = true,
             isListView = viewMode == GalleryViewMode.LIST,
@@ -2027,185 +1994,432 @@ fun GalleryScreen(
             },
           ),
       ) {
-        if (folderAwaitingPermission != null) {
-          GalleryFolderPermissionRequestView(
-            folder = folderAwaitingPermission,
-            onAllowAccess = {
-              requestSystemFolderAccess(folderAwaitingPermission)
-            },
-          )
-        } else if (currentAlbum == null && !hasAnyGrantedFolder) {
-          GalleryLockedStorageStateView()
-        } else if (activeAlbums.isEmpty() && activePhotos.isEmpty()) {
-          if (hasActiveSearchQueryOrTag) {
-            GallerySearchEmptyStateView(
-              searchQuery = searchQuery,
-              selectedTag = selectedTagFilter,
-              onClearSearch = {
-                searchQuery = ""
-                selectedTagFilter = null
+        @Composable
+        fun RenderGalleryPageBody(
+          pageFolderAwaitingPermission: GalleryFolder?,
+          pageAlbums: List<GalleryAlbum>,
+          pagePhotos: List<GalleryPhoto>,
+          pageFolderGroups: List<GalleryFolderGroup>,
+          pagePhotoGroups: List<GalleryPhotoGroup>,
+          pageMatchSnippets: Map<String, String>,
+          pageHasSearchOrTag: Boolean,
+          pageSelectedTag: String?,
+          pageEmptyFolderName: String,
+          isActivePage: Boolean,
+        ) {
+          if (pageFolderAwaitingPermission != null) {
+            GalleryFolderPermissionRequestView(
+              folder = pageFolderAwaitingPermission,
+              onAllowAccess = {
+                requestSystemFolderAccess(pageFolderAwaitingPermission)
               },
             )
-          } else {
-            EmptyAlbumStateView(
-              folderName = currentAlbum?.name ?: "Gallery",
-              onCreateSubfolder = {
-                addAlbumDialogTarget = if (currentAlbum == null) {
-                  AddAlbumTarget.ROOT_ALBUM
+          } else if (currentAlbum == null && !hasAnyGrantedFolder) {
+            GalleryLockedStorageStateView()
+          } else if (pageAlbums.isEmpty() && pagePhotos.isEmpty()) {
+            if (pageHasSearchOrTag) {
+              GallerySearchEmptyStateView(
+                searchQuery = searchQuery,
+                selectedTag = pageSelectedTag,
+                onClearSearch = {
+                  searchQuery = ""
+                  selectedTagFilter = null
+                },
+              )
+            } else {
+              EmptyAlbumStateView(
+                folderName = pageEmptyFolderName,
+                onCreateSubfolder = {
+                  addAlbumDialogTarget = if (currentAlbum == null) {
+                    AddAlbumTarget.ROOT_ALBUM
+                  } else {
+                    AddAlbumTarget.NESTED_ALBUM_HERE
+                  }
+                },
+              )
+            }
+          } else if (viewMode == GalleryViewMode.TILE) {
+            GalleryTileGridView(
+              albums = pageAlbums,
+              photos = pagePhotos,
+              folderGroups = pageFolderGroups,
+              photoGroups = pagePhotoGroups,
+              collapsedGroupTitles = collapsedGroupTitles,
+              onToggleGroupCollapse = { title ->
+                collapsedGroupTitles = if (title in collapsedGroupTitles) {
+                  collapsedGroupTitles - title
                 } else {
-                  AddAlbumTarget.NESTED_ALBUM_HERE
+                  collapsedGroupTitles + title
                 }
               },
+              albumsPerRow = albumsPerRow,
+              isInsideAlbum = currentAlbum != null && pageFolderGroups.isEmpty(),
+              isSelectionMode = isSelectionMode,
+              selectedAlbumPaths = selectedAlbumPaths,
+              selectedPhotoPaths = selectedPhotoPaths,
+              photoIndexMap = photoIndexMap,
+              matchSnippetsByPath = pageMatchSnippets,
+              isVideoPreviewEnabled = isActivePage && selectedPhotoForViewer == null,
+              videoPreviewScopeKey = "${currentAlbum?.path ?: pageEmptyFolderName}:${groupOption.name}",
+              videoPreviewPlayDurationMs = videoPreviewPlayDurationMs,
+              videoPreviewCyclePauseDurationMs = videoPreviewCyclePauseDurationMs,
+              videoPreviewScrollCooldownMs = videoPreviewScrollCooldownMs,
+              onToggleAlbumSelect = { album -> toggleAlbumSelection(album) },
+              onTogglePhotoSelect = { photo -> togglePhotoSelection(photo) },
+              onAlbumLongClick = { album ->
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                if (!isSelectionMode) {
+                  isSelectionMode = true
+                  selectedAlbumPaths = setOf(album.path)
+                  selectedPhotoPaths = emptySet()
+                } else {
+                  toggleAlbumSelection(album)
+                }
+              },
+              onPhotoLongClick = { photo ->
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                if (!isSelectionMode) {
+                  isSelectionMode = true
+                  selectedPhotoPaths = setOf(photo.path)
+                  selectedAlbumPaths = emptySet()
+                } else {
+                  togglePhotoSelection(photo)
+                }
+              },
+              onAlbumClick = { album ->
+                if (isSelectionMode) {
+                  toggleAlbumSelection(album)
+                } else {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  isFabExpanded = false
+                  albumStack.add(album)
+                }
+              },
+              onPhotoClick = { photo ->
+                if (isSelectionMode) {
+                  togglePhotoSelection(photo)
+                } else {
+                  selectedPhotoForViewer = photo
+                  onOpenImage?.invoke(photo.file)
+                }
+              },
+              onPhotoEdit = { photo -> openMediaInEditor(photo) },
+            )
+          } else {
+            GalleryListView(
+              albums = pageAlbums,
+              photos = pagePhotos,
+              folderGroups = pageFolderGroups,
+              photoGroups = pagePhotoGroups,
+              collapsedGroupTitles = collapsedGroupTitles,
+              onToggleGroupCollapse = { title ->
+                collapsedGroupTitles = if (title in collapsedGroupTitles) {
+                  collapsedGroupTitles - title
+                } else {
+                  collapsedGroupTitles + title
+                }
+              },
+              isSelectionMode = isSelectionMode,
+              selectedAlbumPaths = selectedAlbumPaths,
+              selectedPhotoPaths = selectedPhotoPaths,
+              photoIndexMap = photoIndexMap,
+              matchSnippetsByPath = pageMatchSnippets,
+              isVideoPreviewEnabled = isActivePage && selectedPhotoForViewer == null,
+              videoPreviewScopeKey = "${currentAlbum?.path ?: pageEmptyFolderName}:${groupOption.name}",
+              videoPreviewPlayDurationMs = videoPreviewPlayDurationMs,
+              videoPreviewCyclePauseDurationMs = videoPreviewCyclePauseDurationMs,
+              videoPreviewScrollCooldownMs = videoPreviewScrollCooldownMs,
+              onToggleAlbumSelect = { album -> toggleAlbumSelection(album) },
+              onTogglePhotoSelect = { photo -> togglePhotoSelection(photo) },
+              onAlbumLongClick = { album ->
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                if (!isSelectionMode) {
+                  isSelectionMode = true
+                  selectedAlbumPaths = setOf(album.path)
+                  selectedPhotoPaths = emptySet()
+                } else {
+                  toggleAlbumSelection(album)
+                }
+              },
+              onPhotoLongClick = { photo ->
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                if (!isSelectionMode) {
+                  isSelectionMode = true
+                  selectedPhotoPaths = setOf(photo.path)
+                  selectedAlbumPaths = emptySet()
+                } else {
+                  togglePhotoSelection(photo)
+                }
+              },
+              onAlbumClick = { album ->
+                if (isSelectionMode) {
+                  toggleAlbumSelection(album)
+                } else {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  isFabExpanded = false
+                  albumStack.add(album)
+                }
+              },
+              onPhotoClick = { photo ->
+                if (isSelectionMode) {
+                  togglePhotoSelection(photo)
+                } else {
+                  selectedPhotoForViewer = photo
+                  onOpenImage?.invoke(photo.file)
+                }
+              },
+              onPhotoEdit = { photo -> openMediaInEditor(photo) },
             )
           }
-        } else if (viewMode == GalleryViewMode.TILE) {
-          GalleryTileGridView(
-            albums = activeAlbums,
-            photos = activePhotos,
-            folderGroups = folderGroups,
-            photoGroups = photoGroups,
-            collapsedGroupTitles = collapsedGroupTitles,
-            onToggleGroupCollapse = { title ->
-              collapsedGroupTitles = if (title in collapsedGroupTitles) {
-                collapsedGroupTitles - title
-              } else {
-                collapsedGroupTitles + title
+        }
+
+        if (isGallerySearchView) {
+          ToolboxPillHorizontalPager(
+            items = gallerySearchTagOptions,
+            selectedItem = activeGallerySearchTagOption,
+            enabled = gallerySearchTagOptions.size > 1,
+            key = { _, tag -> tag ?: "__ALL_TAGS__" },
+            onSelectItem = { tag ->
+              selectedTagFilter = tag
+            },
+            modifier = Modifier.fillMaxSize(),
+          ) { pageTag ->
+            val isActiveTagPage = pageTag == activeGallerySearchTagOption
+            if (isActiveTagPage) {
+              RenderGalleryPageBody(
+                pageFolderAwaitingPermission = folderAwaitingPermission,
+                pageAlbums = activeAlbums,
+                pagePhotos = activePhotos,
+                pageFolderGroups = folderGroups,
+                pagePhotoGroups = photoGroups,
+                pageMatchSnippets = matchSnippetsByPath,
+                pageHasSearchOrTag = hasActiveSearchQueryOrTag,
+                pageSelectedTag = selectedTagFilter,
+                pageEmptyFolderName = currentAlbum?.name ?: "Gallery",
+                isActivePage = true,
+              )
+            } else {
+              val pageHasSearch = searchQuery.isNotBlank() || pageTag != null
+              val pageSearchRes = remember(rawAlbums, rawPhotos, allScopePhotos, photoIndexMap, searchQuery, pageTag, sortOrder, randomSortSeed) {
+                if (pageHasSearch) {
+                  GalleryEngine.searchGallery(
+                    albums = rawAlbums,
+                    directPhotos = rawPhotos,
+                    allScopePhotos = allScopePhotos,
+                    indexMap = photoIndexMap,
+                    searchQuery = searchQuery,
+                    selectedTag = pageTag,
+                    sortOrder = sortOrder,
+                    randomSeed = randomSortSeed,
+                  )
+                } else {
+                  GallerySearchResult(
+                    matchingAlbums = GalleryEngine.sortAlbums(rawAlbums, sortOrder, randomSortSeed),
+                    matchingPhotos = GalleryEngine.sortPhotos(rawPhotos, sortOrder, randomSortSeed),
+                    matchSnippetsByPath = emptyMap(),
+                  )
+                }
               }
-            },
-            albumsPerRow = albumsPerRow,
-            isInsideAlbum = currentAlbum != null && folderGroups.isEmpty(),
-            isSelectionMode = isSelectionMode,
-            selectedAlbumPaths = selectedAlbumPaths,
-            selectedPhotoPaths = selectedPhotoPaths,
-            photoIndexMap = photoIndexMap,
-            matchSnippetsByPath = matchSnippetsByPath,
-            isVideoPreviewEnabled = selectedPhotoForViewer == null,
-            videoPreviewScopeKey = "${currentAlbum?.path ?: "root"}:${groupOption.name}",
-            videoPreviewPlayDurationMs = videoPreviewPlayDurationMs,
-            videoPreviewCyclePauseDurationMs = videoPreviewCyclePauseDurationMs,
-            videoPreviewScrollCooldownMs = videoPreviewScrollCooldownMs,
-            onToggleAlbumSelect = { album ->
-              toggleAlbumSelection(album)
-            },
-            onTogglePhotoSelect = { photo ->
-              togglePhotoSelection(photo)
-            },
-            onAlbumLongClick = { album ->
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              isFabExpanded = false
-              if (!isSelectionMode) {
-                isSelectionMode = true
-                selectedAlbumPaths = setOf(album.path)
-                selectedPhotoPaths = emptySet()
-              } else {
-                toggleAlbumSelection(album)
+              val pageFGroups = remember(groupOption, activeRootContents, currentAlbum, sortOrder, randomSortSeed, pageHasSearch, searchQuery, pageTag, photoIndexMap, isViewingCustomFolder) {
+                if (groupOption == GalleryGroupOption.FOLDERS) {
+                  GalleryEngine.groupByDefaultFolders(
+                    rootDirectories = activeRootContents.directories,
+                    currentAlbum = currentAlbum,
+                    sortOrder = sortOrder,
+                    searchQuery = if (pageHasSearch) searchQuery else "",
+                    selectedTag = if (pageHasSearch) pageTag else null,
+                    indexMap = photoIndexMap,
+                    bypassNoMedia = isViewingCustomFolder,
+                    randomSeed = randomSortSeed,
+                  )
+                } else {
+                  emptyList()
+                }
               }
-            },
-            onPhotoLongClick = { photo ->
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              isFabExpanded = false
-              if (!isSelectionMode) {
-                isSelectionMode = true
-                selectedPhotoPaths = setOf(photo.path)
-                selectedAlbumPaths = emptySet()
-              } else {
-                togglePhotoSelection(photo)
+              val pagePGroups = remember(groupOption, sortOrder, randomSortSeed, pageHasSearch, pageSearchRes, allScopePhotos, photoIndexMap) {
+                if (groupOption == GalleryGroupOption.NONE || groupOption == GalleryGroupOption.FOLDERS) {
+                  emptyList()
+                } else {
+                  GalleryEngine.groupPhotos(
+                    photos = if (pageHasSearch) pageSearchRes.matchingPhotos else allScopePhotos,
+                    groupOption = groupOption,
+                    sortOrder = sortOrder,
+                    indexMap = photoIndexMap,
+                    randomSeed = randomSortSeed,
+                  )
+                }
               }
-            },
-            onAlbumClick = { album ->
-              if (isSelectionMode) {
-                toggleAlbumSelection(album)
-              } else {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                isFabExpanded = false
-                albumStack.add(album)
+              val pAlbums = when (groupOption) {
+                GalleryGroupOption.NONE -> pageSearchRes.matchingAlbums
+                GalleryGroupOption.FOLDERS -> pageFGroups.flatMap { it.albums }
+                else -> emptyList()
               }
-            },
-            onPhotoClick = { photo ->
-              if (isSelectionMode) {
-                togglePhotoSelection(photo)
-              } else {
-                selectedPhotoForViewer = photo
-                onOpenImage?.invoke(photo.file)
+              val pPhotos = when (groupOption) {
+                GalleryGroupOption.NONE -> pageSearchRes.matchingPhotos
+                GalleryGroupOption.FOLDERS -> pageFGroups.flatMap { it.photos }.distinctBy { it.path }
+                else -> pagePGroups.flatMap { it.photos }.distinctBy { it.path }
               }
-            },
-            onPhotoEdit = { photo ->
-              openMediaInEditor(photo)
-            },
-          )
+              RenderGalleryPageBody(
+                pageFolderAwaitingPermission = folderAwaitingPermission,
+                pageAlbums = pAlbums,
+                pagePhotos = pPhotos,
+                pageFolderGroups = pageFGroups,
+                pagePhotoGroups = pagePGroups,
+                pageMatchSnippets = pageSearchRes.matchSnippetsByPath,
+                pageHasSearchOrTag = pageHasSearch,
+                pageSelectedTag = pageTag,
+                pageEmptyFolderName = currentAlbum?.name ?: "Gallery",
+                isActivePage = false,
+              )
+            }
+          }
         } else {
-          GalleryListView(
-            albums = activeAlbums,
-            photos = activePhotos,
-            folderGroups = folderGroups,
-            photoGroups = photoGroups,
-            collapsedGroupTitles = collapsedGroupTitles,
-            onToggleGroupCollapse = { title ->
-              collapsedGroupTitles = if (title in collapsedGroupTitles) {
-                collapsedGroupTitles - title
-              } else {
-                collapsedGroupTitles + title
-              }
+          ToolboxPillHorizontalPager(
+            items = galleryRootPillIndices,
+            selectedItem = activeGalleryRootPillIndex,
+            enabled = !isSelectionMode && albumStack.isEmpty() && galleryRootPillIndices.size > 1,
+            key = { _, pillIdx ->
+              if (pillIdx <= 0) "__ALBUMS_ROOT__" else "folder_${folderPills.getOrNull(pillIdx - 1)?.displayPath ?: pillIdx}"
             },
-            isSelectionMode = isSelectionMode,
-            selectedAlbumPaths = selectedAlbumPaths,
-            selectedPhotoPaths = selectedPhotoPaths,
-            photoIndexMap = photoIndexMap,
-            matchSnippetsByPath = matchSnippetsByPath,
-            isVideoPreviewEnabled = selectedPhotoForViewer == null,
-            videoPreviewScopeKey = "${currentAlbum?.path ?: "root"}:${groupOption.name}",
-            videoPreviewPlayDurationMs = videoPreviewPlayDurationMs,
-            videoPreviewCyclePauseDurationMs = videoPreviewCyclePauseDurationMs,
-            videoPreviewScrollCooldownMs = videoPreviewScrollCooldownMs,
-            onToggleAlbumSelect = { album ->
-              toggleAlbumSelection(album)
-            },
-            onTogglePhotoSelect = { photo ->
-              togglePhotoSelection(photo)
-            },
-            onAlbumLongClick = { album ->
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              isFabExpanded = false
-              if (!isSelectionMode) {
-                isSelectionMode = true
-                selectedAlbumPaths = setOf(album.path)
-                selectedPhotoPaths = emptySet()
-              } else {
-                toggleAlbumSelection(album)
-              }
-            },
-            onPhotoLongClick = { photo ->
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              isFabExpanded = false
-              if (!isSelectionMode) {
-                isSelectionMode = true
-                selectedPhotoPaths = setOf(photo.path)
-                selectedAlbumPaths = emptySet()
-              } else {
-                togglePhotoSelection(photo)
-              }
-            },
-            onAlbumClick = { album ->
-              if (isSelectionMode) {
-                toggleAlbumSelection(album)
-              } else {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            onSelectItem = { pillIdx ->
+              if (pillIdx <= 0) {
                 isFabExpanded = false
-                albumStack.add(album)
-              }
-            },
-            onPhotoClick = { photo ->
-              if (isSelectionMode) {
-                togglePhotoSelection(photo)
+                exitSelectionMode()
+                navigatedToRootFromInitial = true
+                pendingPermissionFolderPath = null
+                selectedDefaultFolder = null
+                albumStack.clear()
               } else {
-                selectedPhotoForViewer = photo
-                onOpenImage?.invoke(photo.file)
+                val folder = folderPills.getOrNull(pillIdx - 1)
+                if (folder != null) {
+                  handleFolderPillTap(folder)
+                }
               }
             },
-            onPhotoEdit = { photo ->
-              openMediaInEditor(photo)
-            },
-          )
+            modifier = Modifier.fillMaxSize(),
+          ) { pagePillIdx ->
+            val isActiveRootPage = pagePillIdx == activeGalleryRootPillIndex || albumStack.isNotEmpty()
+            if (isActiveRootPage) {
+              RenderGalleryPageBody(
+                pageFolderAwaitingPermission = folderAwaitingPermission,
+                pageAlbums = activeAlbums,
+                pagePhotos = activePhotos,
+                pageFolderGroups = folderGroups,
+                pagePhotoGroups = photoGroups,
+                pageMatchSnippets = matchSnippetsByPath,
+                pageHasSearchOrTag = hasActiveSearchQueryOrTag,
+                pageSelectedTag = selectedTagFilter,
+                pageEmptyFolderName = currentAlbum?.name ?: "Gallery",
+                isActivePage = true,
+              )
+            } else {
+              val pageFolder = if (pagePillIdx > 0) folderPills.getOrNull(pagePillIdx - 1) else null
+              val pageUnpermittedFolder = pageFolder?.takeIf { !isFolderGranted(it) }
+              val pageContents = remember(pageFolder, rootContents, effectiveGrantedFolderPaths, effectiveRootDir, refreshTrigger, isInspection) {
+                if (pageFolder == null) {
+                  rootContents
+                } else if (!isFolderGranted(pageFolder)) {
+                  AlbumContents(
+                    directory = GalleryEngine.resolveDirectoryForFolder(pageFolder, effectiveRootDir),
+                    nestedAlbums = emptyList(),
+                    photos = emptyList(),
+                    directories = emptyList(),
+                  )
+                } else if (isInspection && rootDirectory == null && initialFolders == null) {
+                  rootContents.copy(
+                    nestedAlbums = rootContents.nestedAlbums.filter {
+                      it.path.contains("/${pageFolder.folderName}", ignoreCase = true) ||
+                        it.name.equals(pageFolder.folderName, ignoreCase = true)
+                    }
+                  )
+                } else if (pageFolder.isCustom) {
+                  GalleryEngine.loadFolderPillContents(
+                    folder = pageFolder,
+                    rootDirectory = effectiveRootDir,
+                  )
+                } else {
+                  val matchingDirs = if (!pageFolder.customAbsolutePath.isNullOrBlank()) {
+                    listOf(File(pageFolder.customAbsolutePath))
+                  } else {
+                    rootContents.directories.filter { dir ->
+                      if (pageFolder.folderName.equals("Download", ignoreCase = true) || pageFolder.folderName.equals("Downloads", ignoreCase = true)) {
+                        GalleryEngine.isDownloadsDirectory(dir)
+                      } else {
+                        dir.name.equals(pageFolder.folderName, ignoreCase = true)
+                      }
+                    }.ifEmpty {
+                      listOf(GalleryEngine.resolveDirectoryForFolder(pageFolder, effectiveRootDir))
+                    }
+                  }
+                  GalleryEngine.loadMergedAlbumContents(matchingDirs)
+                }
+              }
+              val pageScopePhotos = remember(pageFolder, pageContents, rootAlbumViewPhotos, refreshTrigger) {
+                if (pageFolder == null) rootAlbumViewPhotos else GalleryEngine.collectAllGalleryPhotos(pageContents)
+              }
+              val pageSortedAlbums = remember(pageContents.nestedAlbums, sortOrder, randomSortSeed) {
+                GalleryEngine.sortAlbums(pageContents.nestedAlbums, sortOrder, randomSortSeed)
+              }
+              val pageSortedPhotos = remember(pageContents.photos, sortOrder, randomSortSeed) {
+                GalleryEngine.sortPhotos(pageContents.photos, sortOrder, randomSortSeed)
+              }
+              val pageFGroups = remember(groupOption, pageContents.directories, sortOrder, randomSortSeed, photoIndexMap, pageFolder) {
+                if (groupOption == GalleryGroupOption.FOLDERS) {
+                  GalleryEngine.groupByDefaultFolders(
+                    rootDirectories = pageContents.directories,
+                    currentAlbum = null,
+                    sortOrder = sortOrder,
+                    searchQuery = "",
+                    selectedTag = null,
+                    indexMap = photoIndexMap,
+                    bypassNoMedia = pageFolder?.isCustom == true,
+                    randomSeed = randomSortSeed,
+                  )
+                } else {
+                  emptyList()
+                }
+              }
+              val pagePGroups = remember(groupOption, sortOrder, randomSortSeed, pageScopePhotos, photoIndexMap) {
+                if (groupOption == GalleryGroupOption.NONE || groupOption == GalleryGroupOption.FOLDERS) {
+                  emptyList()
+                } else {
+                  GalleryEngine.groupPhotos(
+                    photos = pageScopePhotos,
+                    groupOption = groupOption,
+                    sortOrder = sortOrder,
+                    indexMap = photoIndexMap,
+                    randomSeed = randomSortSeed,
+                  )
+                }
+              }
+              val pAlbums = when (groupOption) {
+                GalleryGroupOption.NONE -> pageSortedAlbums
+                GalleryGroupOption.FOLDERS -> pageFGroups.flatMap { it.albums }
+                else -> emptyList()
+              }
+              val pPhotos = when (groupOption) {
+                GalleryGroupOption.NONE -> pageSortedPhotos
+                GalleryGroupOption.FOLDERS -> pageFGroups.flatMap { it.photos }.distinctBy { it.path }
+                else -> pagePGroups.flatMap { it.photos }.distinctBy { it.path }
+              }
+              RenderGalleryPageBody(
+                pageFolderAwaitingPermission = pageUnpermittedFolder,
+                pageAlbums = pAlbums,
+                pagePhotos = pPhotos,
+                pageFolderGroups = pageFGroups,
+                pagePhotoGroups = pagePGroups,
+                pageMatchSnippets = emptyMap(),
+                pageHasSearchOrTag = false,
+                pageSelectedTag = null,
+                pageEmptyFolderName = pageFolder?.pillLabel ?: "Gallery",
+                isActivePage = false,
+              )
+            }
+          }
         }
       }
     }

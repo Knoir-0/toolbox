@@ -1355,28 +1355,40 @@ private fun Obd2DtcSearchOverlay(
         listOf<DtcSystemFilter?>(null) + DtcSystemFilter.entries
       }
 
-      LazyColumn(
-        modifier = Modifier
-          .fillMaxSize()
-          .swipeToSwitchPillView(
-            items = dtcSearchPillOptions,
-            selectedItem = selectedCategory,
-            onSelectItem = { onSelectCategory(it) },
-          ),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        item {
-          Text(
-            text = "${matchingDtcs.size} matching fault code${if (matchingDtcs.size == 1) "" else "s"}",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 4.dp),
-          )
+      ToolboxPillHorizontalPager(
+        items = dtcSearchPillOptions,
+        selectedItem = selectedCategory,
+        key = { _, cat -> cat?.name ?: "__ALL_DTCS__" },
+        onSelectItem = { onSelectCategory(it) },
+        modifier = Modifier.fillMaxSize(),
+      ) { pageCategory ->
+        val pageDtcs = if (pageCategory == selectedCategory) {
+          matchingDtcs
+        } else {
+          remember(query, pageCategory) {
+            Obd2DtcCatalog.search(
+              query = query,
+              categoryFilter = pageCategory,
+            )
+          }
         }
+        LazyColumn(
+          modifier = Modifier.fillMaxSize(),
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          item {
+            Text(
+              text = "${pageDtcs.size} matching fault code${if (pageDtcs.size == 1) "" else "s"}",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(horizontal = 4.dp),
+            )
+          }
 
-        items(matchingDtcs, key = { "search_${it.code}" }) { dtc ->
-          Obd2DtcItemCard(dtc = dtc)
+          items(pageDtcs, key = { "search_${it.code}" }) { dtc ->
+            Obd2DtcItemCard(dtc = dtc)
+          }
         }
       }
     }
@@ -1480,16 +1492,16 @@ private fun Obd2ConnectedDashboardContent(
       }
     }
 
-    Box(
+    ToolboxPillHorizontalPager(
+      items = Obd2ScannerTab.entries,
+      selectedItem = selectedTab,
+      key = { _, tab -> tab.name },
+      onSelectItem = { onSelectTab(it) },
       modifier = Modifier
         .weight(1f)
-        .swipeToSwitchPillView(
-          items = Obd2ScannerTab.entries,
-          selectedItem = selectedTab,
-          onSelectItem = { onSelectTab(it) },
-        ),
-    ) {
-      when (selectedTab) {
+        .fillMaxWidth(),
+    ) { pageTab ->
+      when (pageTab) {
         Obd2ScannerTab.LIVE_GAUGES -> Obd2LiveGaugesContent(
           connectedDeviceName = connectedDeviceName,
           telemetry = telemetry,

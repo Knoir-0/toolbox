@@ -554,74 +554,79 @@ fun PlantScheduleScreen(
         listOf<PlantCategory?>(null) + PlantCategory.entries
       }
 
-      // Tool Content Area + Search Catalog Overlay
+      // Tool Content Area + Search Catalog Overlay (Horizontally Paginated across Plant Categories)
       Box(
         modifier = Modifier
           .fillMaxSize()
-          .weight(1f)
-          .swipeToSwitchPillView(
-            items = plantCategoryPillOptions,
-            selectedItem = selectedCategory,
-            enabled = !isSelectionMode,
-            onSelectItem = { category ->
-              selectedCategoryName = category?.name
-            },
-          ),
+          .weight(1f),
       ) {
-        // Main Scrollable Tool Content
-        LazyColumn(
+        ToolboxPillHorizontalPager(
+          items = plantCategoryPillOptions,
+          selectedItem = selectedCategory,
+          enabled = !isSelectionMode && !isSearchActive,
+          key = { _, cat -> cat?.name ?: "__ALL_PLANTS__" },
+          onSelectItem = { category ->
+            selectedCategoryName = category?.name
+          },
           modifier = Modifier.fillMaxSize(),
-          contentPadding = PaddingValues(
-            start = 16.dp,
-            top = 14.dp,
-            end = 16.dp,
-            bottom = 88.dp, // Extra bottom padding for FAB
-          ),
-          verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-          // 1. Monthly Focus Breakdown / Garden Checklist Card (at the top)
-          item {
-            MonthActivitySummaryCard(
-              monthNumber = selectedMonth,
-              scheduledPlants = filteredScheduledPlants,
-              onSelectMonth = { selectedMonth = it },
-            )
+        ) { pageCategory ->
+          val pageScheduledPlants = remember(scheduledPlants, pageCategory) {
+            if (pageCategory == null) scheduledPlants else scheduledPlants.filter { it.category == pageCategory }
           }
+          LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+              start = 16.dp,
+              top = 14.dp,
+              end = 16.dp,
+              bottom = 88.dp, // Extra bottom padding for FAB
+            ),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+          ) {
+            // 1. Monthly Focus Breakdown / Garden Checklist Card (at the top)
+            item {
+              MonthActivitySummaryCard(
+                monthNumber = selectedMonth,
+                scheduledPlants = pageScheduledPlants,
+                onSelectMonth = { selectedMonth = it },
+              )
+            }
 
-          // 2. Year View Card (12-Month Matrix with Theme & Accent Colors)
-          item {
-            YearViewScheduleCard(
-              scheduledPlants = filteredScheduledPlants,
-              totalScheduledCount = scheduledPlants.size,
-              selectedCategory = selectedCategory,
-              selectedMonth = selectedMonth,
-              isSelectionMode = isSelectionMode,
-              selectedPlantIds = selectedPlantIds,
-              onSelectMonth = { monthNum ->
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                selectedMonth = monthNum
-              },
-              onEditPlant = { plant ->
-                editingPlant = plant
-                prefillPlant = null
-                initialCustomName = ""
-                showEditorDialog = true
-              },
-              onInspectPlant = { plant ->
-                inspectingPlants = listOf(plant)
-              },
-              onDuplicatePlant = { plant ->
-                openDuplicatePlantModal(plant)
-              },
-              onRemovePlant = ::removePlant,
-              onEnterSelectionMode = { plantId ->
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                isSelectionMode = true
-                selectedPlantIds = selectedPlantIds + plantId
-              },
-              onToggleSelectPlant = ::togglePlantSelection,
-              onBrowseCatalog = { isSearchActive = true },
-            )
+            // 2. Year View Card (12-Month Matrix with Theme & Accent Colors)
+            item {
+              YearViewScheduleCard(
+                scheduledPlants = pageScheduledPlants,
+                totalScheduledCount = scheduledPlants.size,
+                selectedCategory = pageCategory,
+                selectedMonth = selectedMonth,
+                isSelectionMode = isSelectionMode,
+                selectedPlantIds = selectedPlantIds,
+                onSelectMonth = { monthNum ->
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  selectedMonth = monthNum
+                },
+                onEditPlant = { plant ->
+                  editingPlant = plant
+                  prefillPlant = null
+                  initialCustomName = ""
+                  showEditorDialog = true
+                },
+                onInspectPlant = { plant ->
+                  inspectingPlants = listOf(plant)
+                },
+                onDuplicatePlant = { plant ->
+                  openDuplicatePlantModal(plant)
+                },
+                onRemovePlant = ::removePlant,
+                onEnterSelectionMode = { plantId ->
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  isSelectionMode = true
+                  selectedPlantIds = selectedPlantIds + plantId
+                },
+                onToggleSelectPlant = ::togglePlantSelection,
+                onBrowseCatalog = { isSearchActive = true },
+              )
+            }
           }
         }
 
@@ -632,22 +637,43 @@ fun PlantScheduleScreen(
           exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(shrinkTowards = Alignment.Top),
           modifier = Modifier.fillMaxSize(),
         ) {
-          CatalogSearchOverlay(
-            query = searchQuery,
-            selectedCategory = selectedCategory,
-            matchingPlants = matchingCatalogPlants,
-            scheduledPlantIds = scheduledPlantIds,
-            onAddPlant = ::addPlant,
-            onRemovePlant = ::removePlant,
-            onTogglePlant = ::togglePlant,
-            onInspectPlant = { plant -> inspectingPlants = listOf(plant) },
-            onCreateCustomWithQuery = {
-              editingPlant = null
-              prefillPlant = null
-              initialCustomName = searchQuery.trim()
-              showEditorDialog = true
+          ToolboxPillHorizontalPager(
+            items = plantCategoryPillOptions,
+            selectedItem = selectedCategory,
+            key = { _, cat -> "search_${cat?.name ?: "ALL"}" },
+            onSelectItem = { category ->
+              selectedCategoryName = category?.name
             },
-          )
+            modifier = Modifier.fillMaxSize(),
+          ) { pageSearchCat ->
+            val pageMatchingCatalogPlants = if (pageSearchCat == selectedCategory) {
+              matchingCatalogPlants
+            } else {
+              remember(allCatalogPlants, searchQuery, pageSearchCat) {
+                PlantScheduleEngine.searchPlants(
+                  catalog = allCatalogPlants,
+                  query = searchQuery,
+                  category = pageSearchCat,
+                )
+              }
+            }
+            CatalogSearchOverlay(
+              query = searchQuery,
+              selectedCategory = pageSearchCat,
+              matchingPlants = pageMatchingCatalogPlants,
+              scheduledPlantIds = scheduledPlantIds,
+              onAddPlant = ::addPlant,
+              onRemovePlant = ::removePlant,
+              onTogglePlant = ::togglePlant,
+              onInspectPlant = { plant -> inspectingPlants = listOf(plant) },
+              onCreateCustomWithQuery = {
+                editingPlant = null
+                prefillPlant = null
+                initialCustomName = searchQuery.trim()
+                showEditorDialog = true
+              },
+            )
+          }
         }
       }
     }

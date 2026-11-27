@@ -995,96 +995,111 @@ private fun DndSpellSearchView(
           listOf<DndSpellCategory?>(null) + DndSpellCategory.entries
         }
 
-        LazyColumn(
+        ToolboxPillHorizontalPager(
+          items = spellCategoryPillOptions,
+          selectedItem = selectedCategory,
+          key = { _, cat -> cat?.name ?: "__ALL_SPELLS__" },
+          onSelectItem = { category ->
+            onSelectCategory(category)
+          },
           modifier = Modifier
             .fillMaxSize()
-            .weight(1f)
-            .swipeToSwitchPillView(
-              items = spellCategoryPillOptions,
-              selectedItem = selectedCategory,
-              onSelectItem = { category ->
-                onSelectCategory(category)
-              },
-            )
-            .testTag("spell_search_results_list"),
-          contentPadding = PaddingValues(
-            start = 16.dp,
-            top = 12.dp,
-            end = 16.dp,
-            bottom = 88.dp,
-          ),
-          verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          item(key = "spells_header") {
-            Column {
-              Text(
-                text = when {
-                  query.isNotBlank() -> "Search Results (${matchingSpells.size})"
-                  selectedCategory == DndSpellCategory.WEAPONS -> "SRD 5.2.1 Weapons (${matchingSpells.size})"
-                  selectedCategory != null -> "${selectedCategory.displayName} Spells (${matchingSpells.size})"
-                  else -> "SRD 5.2.1 Spells & Weapons (${matchingSpells.size})"
-                },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
-              Text(
-                text = "Tap a spell or weapon to return to the roller and roll it immediately",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            .weight(1f),
+        ) { pageCategory ->
+          val isActivePage = pageCategory == selectedCategory
+          val pageSpells = if (isActivePage) {
+            matchingSpells
+          } else {
+            remember(query, pageCategory) {
+              DndSpellCatalog.searchSpells(
+                query = query,
+                category = pageCategory,
               )
             }
           }
 
-          if (matchingSpells.isEmpty()) {
-            item(key = "spells_empty") {
-              Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(
-                  containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                ),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .testTag("spell_search_empty_card"),
-              ) {
-                Column(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp),
-                  horizontalAlignment = Alignment.CenterHorizontally,
-                  verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                  Text(
-                    text = if (query.isNotBlank()) {
-                      "No spells or weapons found matching \"$query\""
-                    } else {
-                      "No matching entries"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                  )
-                  Text(
-                    text = "Try searching by spell or weapon name (e.g. Fireball, Cure Wounds, Longsword), damage type, or dice notation.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                  )
-                }
+          LazyColumn(
+            modifier = Modifier
+              .fillMaxSize()
+              .then(if (isActivePage) Modifier.testTag("spell_search_results_list") else Modifier),
+            contentPadding = PaddingValues(
+              start = 16.dp,
+              top = 12.dp,
+              end = 16.dp,
+              bottom = 88.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            item(key = "spells_header") {
+              Column {
+                Text(
+                  text = when {
+                    query.isNotBlank() -> "Search Results (${pageSpells.size})"
+                    pageCategory == DndSpellCategory.WEAPONS -> "SRD 5.2.1 Weapons (${pageSpells.size})"
+                    pageCategory != null -> "${pageCategory.displayName} Spells (${pageSpells.size})"
+                    else -> "SRD 5.2.1 Spells & Weapons (${pageSpells.size})"
+                  },
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = "Tap a spell or weapon to return to the roller and roll it immediately",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
               }
             }
-          } else {
-            items(
-              items = matchingSpells,
-              key = { it.id },
-            ) { spell ->
-              Card(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .clip(RoundedCornerShape(14.dp))
-                  .clickable { onSelectSpell(spell) }
-                  .testTag("spell_card_${spell.id}"),
+
+            if (pageSpells.isEmpty()) {
+              item(key = "spells_empty") {
+                Card(
+                  shape = RoundedCornerShape(14.dp),
+                  colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                  ),
+                  border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (isActivePage) Modifier.testTag("spell_search_empty_card") else Modifier),
+                ) {
+                  Column(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                  ) {
+                    Text(
+                      text = if (query.isNotBlank()) {
+                        "No spells or weapons found matching \"$query\""
+                      } else {
+                        "No matching entries"
+                      },
+                      style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                      text = "Try searching by spell or weapon name (e.g. Fireball, Cure Wounds, Longsword), damage type, or dice notation.",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      textAlign = TextAlign.Center,
+                    )
+                  }
+                }
+              }
+            } else {
+              items(
+                items = pageSpells,
+                key = { it.id },
+              ) { spell ->
+                Card(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { onSelectSpell(spell) }
+                    .then(if (isActivePage) Modifier.testTag("spell_card_${spell.id}") else Modifier),
                 shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(
                   containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
@@ -1162,6 +1177,7 @@ private fun DndSpellSearchView(
               }
             }
           }
+        }
         }
       }
 

@@ -61,6 +61,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -90,6 +92,8 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Palette
@@ -102,6 +106,8 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.VideoFile
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.ButtonDefaults
@@ -154,6 +160,10 @@ import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -284,6 +294,36 @@ fun ArchiveScreen(
   var showBulkInfoDialog by remember { mutableStateOf(false) }
   var showBulkDeleteDialog by remember { mutableStateOf(false) }
 
+  // Password encryption & session unlock state (keyed by canonical/absolute path)
+  var unlockedPasswords by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+  var showUnlockPasswordDialog by remember { mutableStateOf(false) }
+  var pendingActionAfterUnlock by remember { mutableStateOf<((String?) -> Unit)?>(null) }
+  var showManagePasswordDialog by remember { mutableStateOf(false) }
+
+  val activeArchivePassword = activeArchiveFile?.absolutePath?.let { unlockedPasswords[it] }
+  val isArchiveLocked = archiveInfo?.isEncrypted == true && activeArchivePassword.isNullOrEmpty()
+
+  LaunchedEffect(archiveInfo?.file?.absolutePath, archiveInfo?.isEncrypted) {
+    val info = archiveInfo
+    if (!isInspection && info != null && info.isEncrypted && unlockedPasswords[info.file.absolutePath].isNullOrEmpty()) {
+      showUnlockPasswordDialog = true
+    }
+  }
+
+  fun runWithUnlockedArchive(info: ArchiveInfo, action: (password: String?) -> Unit) {
+    if (!info.isEncrypted) {
+      action(null)
+    } else {
+      val cachedPw = unlockedPasswords[info.file.absolutePath]
+      if (!cachedPw.isNullOrEmpty()) {
+        action(cachedPw)
+      } else {
+        pendingActionAfterUnlock = action
+        showUnlockPasswordDialog = true
+      }
+    }
+  }
+
   var extractPathsTarget by remember { mutableStateOf<Set<String>?>(null) } // emptySet() means extract all
   var entryForDetails by remember { mutableStateOf<ArchiveEntryItem?>(null) }
   var entryForTextPreview by remember { mutableStateOf<ArchiveEntryItem?>(null) }
@@ -344,30 +384,35 @@ fun ArchiveScreen(
   ) { uris: List<Uri> ->
     val info = archiveInfo ?: return@rememberLauncherForActivityResult
     if (uris.isNotEmpty()) {
-      coroutineScope.launch {
-        isBusy = true
-        val filesToAdd = withContext(Dispatchers.IO) {
-          uris.mapNotNull { uri -> copyUriToTempSourceFile(context, uri) }
-        }
-        if (filesToAdd.isNotEmpty()) {
-          val result = withContext(Dispatchers.IO) {
-            ArchiveEngine.addFilesToArchive(
-              archiveFile = info.file,
-              filesToAdd = filesToAdd,
-              targetVirtualDir = currentVirtualDir,
-              compressionLevel = ArchiveCompressionLevel.BALANCED,
-            )
+      runWithUnlockedArchive(info) { pw ->
+        coroutineScope.launch {
+          isBusy = true
+          val filesToAdd = withContext(Dispatchers.IO) {
+            uris.mapNotNull { uri -> copyUriToTempSourceFile(context, uri) }
           }
-          isBusy = false
-          lastOperationBanner = result
-          if (result.success) {
-            archiveRevision++
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          if (filesToAdd.isNotEmpty()) {
+            val result = withContext(Dispatchers.IO) {
+              ArchiveEngine.addFilesToArchive(
+                archiveFile = info.file,
+                filesToAdd = filesToAdd,
+                targetVirtualDir = currentVirtualDir,
+                compressionLevel = ArchiveCompressionLevel.BALANCED,
+                password = pw,
+              )
+            }
+            isBusy = false
+            lastOperationBanner = result
+            if (result.success) {
+              archiveRevision++
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            } else if (result.passwordRequired || result.invalidPassword) {
+              showUnlockPasswordDialog = true
+            }
+            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+          } else {
+            isBusy = false
+            Toast.makeText(context, "Could not load selected files", Toast.LENGTH_SHORT).show()
           }
-          Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-        } else {
-          isBusy = false
-          Toast.makeText(context, "Could not load selected files", Toast.LENGTH_SHORT).show()
         }
       }
     }
@@ -401,32 +446,36 @@ fun ArchiveScreen(
   }
 
   fun openEntryExternally(info: ArchiveInfo, entry: ArchiveEntryItem, chooseApp: Boolean) {
-    coroutineScope.launch {
-      val extractedTemp = withContext(Dispatchers.IO) {
-        ArchiveEngine.extractEntryToTempFile(context, info.file, entry)
-      }
-      if (extractedTemp != null) {
-        FileManagerEngine.openFile(context, extractedTemp, chooseApp)
-      } else {
-        Toast.makeText(context, "Could not extract ${entry.name}", Toast.LENGTH_SHORT).show()
+    runWithUnlockedArchive(info) { pw ->
+      coroutineScope.launch {
+        val extractedTemp = withContext(Dispatchers.IO) {
+          ArchiveEngine.extractEntryToTempFile(context, info.file, entry, password = pw)
+        }
+        if (extractedTemp != null) {
+          FileManagerEngine.openFile(context, extractedTemp, chooseApp)
+        } else {
+          Toast.makeText(context, "Could not extract ${entry.name}", Toast.LENGTH_SHORT).show()
+        }
       }
     }
   }
 
   fun shareArchiveEntry(info: ArchiveInfo, entry: ArchiveEntryItem) {
-    coroutineScope.launch {
-      val extractedTemp = withContext(Dispatchers.IO) {
-        ArchiveEngine.extractEntryToTempFile(context, info.file, entry)
-      }
-      if (extractedTemp != null) {
-        CrossToolActions.shareFile(
-          context = context,
-          file = extractedTemp,
-          mimeTypeOverride = entry.mimeType,
-          chooserTitle = "Share ${entry.name}",
-        )
-      } else {
-        Toast.makeText(context, "Could not extract ${entry.name}", Toast.LENGTH_SHORT).show()
+    runWithUnlockedArchive(info) { pw ->
+      coroutineScope.launch {
+        val extractedTemp = withContext(Dispatchers.IO) {
+          ArchiveEngine.extractEntryToTempFile(context, info.file, entry, password = pw)
+        }
+        if (extractedTemp != null) {
+          CrossToolActions.shareFile(
+            context = context,
+            file = extractedTemp,
+            mimeTypeOverride = entry.mimeType,
+            chooserTitle = "Share ${entry.name}",
+          )
+        } else {
+          Toast.makeText(context, "Could not extract ${entry.name}", Toast.LENGTH_SHORT).show()
+        }
       }
     }
   }
@@ -436,14 +485,16 @@ fun ArchiveScreen(
     entry: ArchiveEntryItem,
     onExtracted: (File) -> Unit,
   ) {
-    coroutineScope.launch {
-      val extractedTemp = withContext(Dispatchers.IO) {
-        ArchiveEngine.extractEntryToTempFile(context, info.file, entry)
-      }
-      if (extractedTemp != null) {
-        onExtracted(extractedTemp)
-      } else {
-        Toast.makeText(context, "Could not extract ${entry.name}", Toast.LENGTH_SHORT).show()
+    runWithUnlockedArchive(info) { pw ->
+      coroutineScope.launch {
+        val extractedTemp = withContext(Dispatchers.IO) {
+          ArchiveEngine.extractEntryToTempFile(context, info.file, entry, password = pw)
+        }
+        if (extractedTemp != null) {
+          onExtracted(extractedTemp)
+        } else {
+          Toast.makeText(context, "Could not extract ${entry.name}", Toast.LENGTH_SHORT).show()
+        }
       }
     }
   }
@@ -629,7 +680,12 @@ fun ArchiveScreen(
       } else {
         val compSize = FileManagerEngine.formatFileSize(currentInfo.archiveFileSizeBytes)
         val uncompSize = FileManagerEngine.formatFileSize(currentInfo.totalUncompressedBytes)
-        "${currentInfo.format.displayName} • $compSize ($uncompSize uncompressed)"
+        val encTag = if (currentInfo.isEncrypted) {
+          " • ${currentInfo.encryptionMethod.shortLabel} ${if (isArchiveLocked) "(Locked)" else "(Encrypted)"}"
+        } else {
+          ""
+        }
+        "${currentInfo.format.displayName}$encTag • $compSize ($uncompSize uncompressed)"
       }
 
       Column(
@@ -671,7 +727,9 @@ fun ArchiveScreen(
             updateGridColumnsPerRow(cols)
           },
           onExtractAll = {
-            extractPathsTarget = emptySet()
+            runWithUnlockedArchive(currentInfo) {
+              extractPathsTarget = emptySet()
+            }
           },
           onCloseArchive = {
             closeCurrentArchive()
@@ -692,7 +750,9 @@ fun ArchiveScreen(
           },
           onBulkExtract = {
             if (selectedArchivePaths.isNotEmpty()) {
-              extractPathsTarget = selectedArchivePaths
+              runWithUnlockedArchive(currentInfo) {
+                extractPathsTarget = selectedArchivePaths
+              }
             }
           },
           onBulkInfo = {
@@ -702,7 +762,9 @@ fun ArchiveScreen(
           },
           onBulkDelete = {
             if (selectedArchivePaths.isNotEmpty()) {
-              showBulkDeleteDialog = true
+              runWithUnlockedArchive(currentInfo) {
+                showBulkDeleteDialog = true
+              }
             }
           },
         )
@@ -712,6 +774,9 @@ fun ArchiveScreen(
           archiveName = currentInfo.file.name,
           isAtRoot = !canGoUpInArchive,
           supportsModify = currentInfo.format.supportsMultiEntryWrite,
+          supportsPasswordEncryption = currentInfo.format.supportsPasswordEncryption,
+          isEncrypted = currentInfo.isEncrypted,
+          isLocked = isArchiveLocked,
           viewMode = viewMode,
           gridColumnsPerRow = gridColumnsPerRow,
           onGridColumnsChange = { updateGridColumnsPerRow(it) },
@@ -729,8 +794,23 @@ fun ArchiveScreen(
             showSortMenu = false
           },
           onNavigateRoot = { navigateToVirtualDir("") },
-          onExtractAll = { extractPathsTarget = emptySet() },
-          onAddFiles = { addFilesToArchiveLauncher.launch(arrayOf("*/*")) },
+          onExtractAll = {
+            runWithUnlockedArchive(currentInfo) {
+              extractPathsTarget = emptySet()
+            }
+          },
+          onAddFiles = {
+            runWithUnlockedArchive(currentInfo) {
+              addFilesToArchiveLauncher.launch(arrayOf("*/*"))
+            }
+          },
+          onPasswordActionClick = {
+            if (currentInfo.isEncrypted && isArchiveLocked) {
+              showUnlockPasswordDialog = true
+            } else {
+              showManagePasswordDialog = true
+            }
+          },
           onNewZip = {
             preselectedFilesForZip = emptyList()
             showCreateZipDialog = true
@@ -794,8 +874,16 @@ fun ArchiveScreen(
               isSearching = searchQuery.isNotEmpty(),
               searchQuery = searchQuery,
               supportsModify = currentInfo.format.supportsMultiEntryWrite,
-              onAddFiles = { addFilesToArchiveLauncher.launch(arrayOf("*/*")) },
-              onCreateFolder = { showCreateFolderDialog = true },
+              onAddFiles = {
+                runWithUnlockedArchive(currentInfo) {
+                  addFilesToArchiveLauncher.launch(arrayOf("*/*"))
+                }
+              },
+              onCreateFolder = {
+                runWithUnlockedArchive(currentInfo) {
+                  showCreateFolderDialog = true
+                }
+              },
             )
           } else {
             when (viewMode) {
@@ -832,6 +920,7 @@ fun ArchiveScreen(
                       ) { item ->
                         ArchiveEntryListItem(
                           item = item,
+                          isArchiveLocked = isArchiveLocked,
                           isSelectionMode = isSelectionMode,
                           isSelected = item.archivePath in selectedArchivePaths,
                           supportsModify = currentInfo.format.supportsMultiEntryWrite,
@@ -845,8 +934,12 @@ fun ArchiveScreen(
                           onClick = {
                             when {
                               item.isDirectory -> navigateToVirtualDir(item.archivePath)
-                              ArchiveEngine.isTextEntry(item) -> entryForTextPreview = item
-                              ArchiveEngine.isImageEntry(item) -> entryForImagePreview = item
+                              ArchiveEngine.isTextEntry(item) -> runWithUnlockedArchive(currentInfo) {
+                                entryForTextPreview = item
+                              }
+                              ArchiveEngine.isImageEntry(item) -> runWithUnlockedArchive(currentInfo) {
+                                entryForImagePreview = item
+                              }
                               else -> entryForDetails = item
                             }
                           },
@@ -863,14 +956,26 @@ fun ArchiveScreen(
                               }
                             }
                           },
-                          onPreviewText = { entryForTextPreview = item },
-                          onPreviewImage = { entryForImagePreview = item },
-                          onExtractEntry = { extractPathsTarget = setOf(item.archivePath) },
+                          onPreviewText = {
+                            runWithUnlockedArchive(currentInfo) { entryForTextPreview = item }
+                          },
+                          onPreviewImage = {
+                            runWithUnlockedArchive(currentInfo) { entryForImagePreview = item }
+                          },
+                          onExtractEntry = {
+                            runWithUnlockedArchive(currentInfo) {
+                              extractPathsTarget = setOf(item.archivePath)
+                            }
+                          },
                           onOpenWith = { openEntryExternally(currentInfo, item, chooseApp = true) },
                           onShare = { shareArchiveEntry(currentInfo, item) },
-                          onRename = { entryToRename = item },
+                          onRename = {
+                            runWithUnlockedArchive(currentInfo) { entryToRename = item }
+                          },
                           onDetails = { entryForDetails = item },
-                          onDelete = { entryToDelete = item },
+                          onDelete = {
+                            runWithUnlockedArchive(currentInfo) { entryToDelete = item }
+                          },
                         )
                       }
                     }
@@ -917,6 +1022,7 @@ fun ArchiveScreen(
                       ) { item ->
                         ArchiveEntryGridItem(
                           item = item,
+                          isArchiveLocked = isArchiveLocked,
                           isCompact = isCompactGrid,
                           isSelectionMode = isSelectionMode,
                           isSelected = item.archivePath in selectedArchivePaths,
@@ -931,8 +1037,12 @@ fun ArchiveScreen(
                           onClick = {
                             when {
                               item.isDirectory -> navigateToVirtualDir(item.archivePath)
-                              ArchiveEngine.isTextEntry(item) -> entryForTextPreview = item
-                              ArchiveEngine.isImageEntry(item) -> entryForImagePreview = item
+                              ArchiveEngine.isTextEntry(item) -> runWithUnlockedArchive(currentInfo) {
+                                entryForTextPreview = item
+                              }
+                              ArchiveEngine.isImageEntry(item) -> runWithUnlockedArchive(currentInfo) {
+                                entryForImagePreview = item
+                              }
                               else -> entryForDetails = item
                             }
                           },
@@ -949,14 +1059,26 @@ fun ArchiveScreen(
                               }
                             }
                           },
-                          onPreviewText = { entryForTextPreview = item },
-                          onPreviewImage = { entryForImagePreview = item },
-                          onExtractEntry = { extractPathsTarget = setOf(item.archivePath) },
+                          onPreviewText = {
+                            runWithUnlockedArchive(currentInfo) { entryForTextPreview = item }
+                          },
+                          onPreviewImage = {
+                            runWithUnlockedArchive(currentInfo) { entryForImagePreview = item }
+                          },
+                          onExtractEntry = {
+                            runWithUnlockedArchive(currentInfo) {
+                              extractPathsTarget = setOf(item.archivePath)
+                            }
+                          },
                           onOpenWith = { openEntryExternally(currentInfo, item, chooseApp = true) },
                           onShare = { shareArchiveEntry(currentInfo, item) },
-                          onRename = { entryToRename = item },
+                          onRename = {
+                            runWithUnlockedArchive(currentInfo) { entryToRename = item }
+                          },
                           onDetails = { entryForDetails = item },
-                          onDelete = { entryToDelete = item },
+                          onDelete = {
+                            runWithUnlockedArchive(currentInfo) { entryToDelete = item }
+                          },
                         )
                       }
                     }
@@ -1022,9 +1144,31 @@ fun ArchiveScreen(
                 testTag = "fab_extract_all",
                 onClick = {
                   isFabExpanded = false
-                  extractPathsTarget = emptySet()
+                  runWithUnlockedArchive(currentInfo) {
+                    extractPathsTarget = emptySet()
+                  }
                 },
               )
+
+              if (currentInfo.format.supportsPasswordEncryption) {
+                SpeedDialMiniFabRow(
+                  label = when {
+                    currentInfo.isEncrypted && isArchiveLocked -> "Unlock archive"
+                    currentInfo.isEncrypted -> "Password protection"
+                    else -> "Encrypt with password"
+                  },
+                  icon = if (currentInfo.isEncrypted && isArchiveLocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                  testTag = "fab_archive_password",
+                  onClick = {
+                    isFabExpanded = false
+                    if (currentInfo.isEncrypted && isArchiveLocked) {
+                      showUnlockPasswordDialog = true
+                    } else {
+                      showManagePasswordDialog = true
+                    }
+                  },
+                )
+              }
 
               if (currentInfo.format.supportsMultiEntryWrite) {
                 // Mini FAB: Add Files to Archive
@@ -1034,7 +1178,9 @@ fun ArchiveScreen(
                   testTag = "fab_add_files",
                   onClick = {
                     isFabExpanded = false
-                    addFilesToArchiveLauncher.launch(arrayOf("*/*"))
+                    runWithUnlockedArchive(currentInfo) {
+                      addFilesToArchiveLauncher.launch(arrayOf("*/*"))
+                    }
                   },
                 )
 
@@ -1045,7 +1191,9 @@ fun ArchiveScreen(
                   testTag = "fab_new_folder",
                   onClick = {
                     isFabExpanded = false
-                    showCreateFolderDialog = true
+                    runWithUnlockedArchive(currentInfo) {
+                      showCreateFolderDialog = true
+                    }
                   },
                 )
               }
@@ -1109,7 +1257,7 @@ fun ArchiveScreen(
         showCreateZipDialog = false
         preselectedFilesForZip = emptyList()
       },
-      onCreateArchive = { sourceFiles, outputFile, format, compressionLevel ->
+      onCreateArchive = { sourceFiles, outputFile, format, compressionLevel, password, encryptionMethod ->
         showCreateZipDialog = false
         preselectedFilesForZip = emptyList()
         coroutineScope.launch {
@@ -1120,11 +1268,18 @@ fun ArchiveScreen(
               outputFile = outputFile,
               format = format,
               compressionLevel = compressionLevel,
+              password = password,
+              encryptionMethod = encryptionMethod,
             )
           }
           isBusy = false
           lastOperationBanner = result
           if (result.success && result.outputFile != null) {
+            if (!password.isNullOrEmpty()) {
+              unlockedPasswords = unlockedPasswords + (result.outputFile.absolutePath to password)
+            } else {
+              unlockedPasswords = unlockedPasswords - result.outputFile.absolutePath
+            }
             activeArchiveFile = result.outputFile
             currentVirtualDir = ""
             selectedArchivePaths = emptySet()
@@ -1134,6 +1289,62 @@ fun ArchiveScreen(
           } else {
             Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
           }
+        }
+      },
+    )
+  }
+
+  // 2. Unlock Encrypted Archive Password Dialog
+  if (showUnlockPasswordDialog && archiveInfo != null && archiveInfo.isEncrypted) {
+    UnlockArchivePasswordDialog(
+      archiveInfo = archiveInfo,
+      onDismiss = {
+        showUnlockPasswordDialog = false
+        pendingActionAfterUnlock = null
+      },
+      onUnlocked = { verifiedPassword ->
+        unlockedPasswords = unlockedPasswords + (archiveInfo.file.absolutePath to verifiedPassword)
+        showUnlockPasswordDialog = false
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        val pending = pendingActionAfterUnlock
+        pendingActionAfterUnlock = null
+        pending?.invoke(verifiedPassword)
+      },
+    )
+  }
+
+  // 2b. Encrypt / Change / Remove Archive Password Dialog
+  if (showManagePasswordDialog && archiveInfo != null && archiveInfo.format.supportsPasswordEncryption) {
+    ManageArchivePasswordDialog(
+      archiveInfo = archiveInfo,
+      currentUnlockedPassword = activeArchivePassword,
+      onDismiss = { showManagePasswordDialog = false },
+      onApplyPasswordChange = { currentPw, newPw, method ->
+        showManagePasswordDialog = false
+        coroutineScope.launch {
+          isBusy = true
+          val result = withContext(Dispatchers.IO) {
+            ArchiveEngine.updateArchivePassword(
+              archiveFile = archiveInfo.file,
+              currentPassword = currentPw,
+              newPassword = newPw,
+              encryptionMethod = method,
+            )
+          }
+          isBusy = false
+          lastOperationBanner = result
+          if (result.success) {
+            unlockedPasswords = if (!newPw.isNullOrEmpty()) {
+              unlockedPasswords + (archiveInfo.file.absolutePath to newPw)
+            } else {
+              unlockedPasswords - archiveInfo.file.absolutePath
+            }
+            archiveRevision++
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          } else if (result.passwordRequired || result.invalidPassword) {
+            showUnlockPasswordDialog = true
+          }
+          Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
         }
       },
     )
@@ -1152,6 +1363,7 @@ fun ArchiveScreen(
       defaultSubfolderName = archiveStem,
       onDismiss = { extractPathsTarget = null },
       onConfirmExtract = { destinationDir, preserveStructure, overwriteExisting ->
+        val pw = activeArchivePassword
         extractPathsTarget = null
         coroutineScope.launch {
           isBusy = true
@@ -1164,6 +1376,7 @@ fun ArchiveScreen(
                 preservePaths = preserveStructure,
                 overwrite = overwriteExisting,
                 extractEntireArchive = true,
+                password = pw,
               )
             } else {
               ArchiveEngine.extractEntries(
@@ -1173,14 +1386,20 @@ fun ArchiveScreen(
                 preservePaths = preserveStructure,
                 overwrite = overwriteExisting,
                 extractEntireArchive = false,
+                password = pw,
               )
             }
           }
           isBusy = false
           lastOperationBanner = result
-          isSelectionMode = false
-          selectedArchivePaths = emptySet()
-          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          if (result.passwordRequired || result.invalidPassword) {
+            unlockedPasswords = unlockedPasswords - archiveInfo.file.absolutePath
+            showUnlockPasswordDialog = true
+          } else {
+            isSelectionMode = false
+            selectedArchivePaths = emptySet()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          }
           Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
         }
       },
@@ -1192,6 +1411,7 @@ fun ArchiveScreen(
     CreateArchiveFolderDialog(
       onDismiss = { showCreateFolderDialog = false },
       onCreate = { folderName ->
+        val pw = activeArchivePassword
         showCreateFolderDialog = false
         coroutineScope.launch {
           val result = withContext(Dispatchers.IO) {
@@ -1199,11 +1419,14 @@ fun ArchiveScreen(
               archiveFile = archiveInfo.file,
               parentVirtualDir = currentVirtualDir,
               folderName = folderName,
+              password = pw,
             )
           }
           if (result.success) {
             archiveRevision++
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          } else if (result.passwordRequired || result.invalidPassword) {
+            showUnlockPasswordDialog = true
           }
           Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
         }
@@ -1218,6 +1441,7 @@ fun ArchiveScreen(
       item = activeRenameEntry,
       onDismiss = { entryToRename = null },
       onRename = { newName ->
+        val pw = activeArchivePassword
         entryToRename = null
         coroutineScope.launch {
           val result = withContext(Dispatchers.IO) {
@@ -1225,11 +1449,14 @@ fun ArchiveScreen(
               archiveFile = archiveInfo.file,
               oldArchivePath = activeRenameEntry.archivePath,
               newLeafName = newName,
+              password = pw,
             )
           }
           if (result.success) {
             archiveRevision++
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          } else if (result.passwordRequired || result.invalidPassword) {
+            showUnlockPasswordDialog = true
           }
           Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
         }
@@ -1244,17 +1471,21 @@ fun ArchiveScreen(
       itemNames = listOf(activeDeleteEntry.name),
       onDismiss = { entryToDelete = null },
       onConfirmDelete = {
+        val pw = activeArchivePassword
         entryToDelete = null
         coroutineScope.launch {
           val result = withContext(Dispatchers.IO) {
             ArchiveEngine.deleteEntriesFromArchive(
               archiveFile = archiveInfo.file,
               pathsToRemove = setOf(activeDeleteEntry.archivePath),
+              password = pw,
             )
           }
           if (result.success) {
             archiveRevision++
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          } else if (result.passwordRequired || result.invalidPassword) {
+            showUnlockPasswordDialog = true
           }
           Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
         }
@@ -1272,12 +1503,14 @@ fun ArchiveScreen(
       onDismiss = { showBulkDeleteDialog = false },
       onConfirmDelete = {
         val targets = selectedArchivePaths
+        val pw = activeArchivePassword
         showBulkDeleteDialog = false
         coroutineScope.launch {
           val result = withContext(Dispatchers.IO) {
             ArchiveEngine.deleteEntriesFromArchive(
               archiveFile = archiveInfo.file,
               pathsToRemove = targets,
+              password = pw,
             )
           }
           if (result.success) {
@@ -1285,6 +1518,8 @@ fun ArchiveScreen(
             selectedArchivePaths = emptySet()
             archiveRevision++
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          } else if (result.passwordRequired || result.invalidPassword) {
+            showUnlockPasswordDialog = true
           }
           Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
         }
@@ -1301,18 +1536,24 @@ fun ArchiveScreen(
       onDismiss = { entryForDetails = null },
       onExtract = {
         entryForDetails = null
-        extractPathsTarget = setOf(activeDetailsEntry.archivePath)
+        runWithUnlockedArchive(archiveInfo) {
+          extractPathsTarget = setOf(activeDetailsEntry.archivePath)
+        }
       },
       onPreviewText = if (ArchiveEngine.isTextEntry(activeDetailsEntry)) {
         {
           entryForDetails = null
-          entryForTextPreview = activeDetailsEntry
+          runWithUnlockedArchive(archiveInfo) {
+            entryForTextPreview = activeDetailsEntry
+          }
         }
       } else null,
       onPreviewImage = if (ArchiveEngine.isImageEntry(activeDetailsEntry)) {
         {
           entryForDetails = null
-          entryForImagePreview = activeDetailsEntry
+          runWithUnlockedArchive(archiveInfo) {
+            entryForImagePreview = activeDetailsEntry
+          }
         }
       } else null,
     )
@@ -1331,7 +1572,18 @@ fun ArchiveScreen(
   if (showArchiveInfoDialog && archiveInfo != null) {
     ArchiveContainerInfoDialog(
       archiveInfo = archiveInfo,
+      isLocked = isArchiveLocked,
       onDismiss = { showArchiveInfoDialog = false },
+      onManagePassword = if (archiveInfo.format.supportsPasswordEncryption) {
+        {
+          showArchiveInfoDialog = false
+          if (archiveInfo.isEncrypted && isArchiveLocked) {
+            showUnlockPasswordDialog = true
+          } else {
+            showManagePasswordDialog = true
+          }
+        }
+      } else null,
       onShareArchive = {
         showArchiveInfoDialog = false
         shareConvertedFile(context, archiveInfo.file, archiveInfo.format.mimeType)
@@ -1345,10 +1597,13 @@ fun ArchiveScreen(
     ArchiveTextPreviewDialog(
       archiveFile = archiveInfo.file,
       entry = activeTextEntry,
+      password = activeArchivePassword,
       onDismiss = { entryForTextPreview = null },
       onExtract = {
         entryForTextPreview = null
-        extractPathsTarget = setOf(activeTextEntry.archivePath)
+        runWithUnlockedArchive(archiveInfo) {
+          extractPathsTarget = setOf(activeTextEntry.archivePath)
+        }
       },
     )
   }
@@ -1359,10 +1614,13 @@ fun ArchiveScreen(
     ArchiveImagePreviewDialog(
       archiveFile = archiveInfo.file,
       entry = activeImageEntry,
+      password = activeArchivePassword,
       onDismiss = { entryForImagePreview = null },
       onExtract = {
         entryForImagePreview = null
-        extractPathsTarget = setOf(activeImageEntry.archivePath)
+        runWithUnlockedArchive(archiveInfo) {
+          extractPathsTarget = setOf(activeImageEntry.archivePath)
+        }
       },
       onShare = {
         shareArchiveEntry(archiveInfo, activeImageEntry)
@@ -1719,6 +1977,9 @@ private fun ArchiveActionPillRow(
   archiveName: String,
   isAtRoot: Boolean,
   supportsModify: Boolean,
+  supportsPasswordEncryption: Boolean = false,
+  isEncrypted: Boolean = false,
+  isLocked: Boolean = false,
   viewMode: FileViewMode = FileViewMode.LIST,
   gridColumnsPerRow: Int = DEFAULT_FILES_GRID_COLUMNS,
   onGridColumnsChange: (Int) -> Unit = {},
@@ -1732,6 +1993,7 @@ private fun ArchiveActionPillRow(
   onNavigateRoot: () -> Unit,
   onExtractAll: () -> Unit,
   onAddFiles: () -> Unit,
+  onPasswordActionClick: () -> Unit = {},
   onNewZip: () -> Unit,
   onShowArchiveInfo: () -> Unit,
 ) {
@@ -1746,6 +2008,24 @@ private fun ArchiveActionPillRow(
         label = archiveName,
         testTag = "chip_archive_root",
       )
+
+      if (supportsPasswordEncryption) {
+        ToolboxPillNavigationItem(
+          selected = isEncrypted && !isLocked,
+          onClick = onPasswordActionClick,
+          leadingIcon = if (isEncrypted && !isLocked) Icons.Default.LockOpen else Icons.Default.Lock,
+          label = when {
+            isEncrypted && isLocked -> "Unlock"
+            isEncrypted -> "Password"
+            else -> "Encrypt"
+          },
+          testTag = when {
+            isEncrypted && isLocked -> "chip_unlock_archive"
+            isEncrypted -> "chip_manage_password"
+            else -> "chip_encrypt_archive"
+          },
+        )
+      }
 
       ToolboxPillNavigationItem(
         selected = false,
@@ -2083,6 +2363,7 @@ private fun ArchiveGroupHeader(
 @Composable
 private fun ArchiveEntryListItem(
   item: ArchiveEntryItem,
+  isArchiveLocked: Boolean = false,
   isSelectionMode: Boolean,
   isSelected: Boolean,
   supportsModify: Boolean,
@@ -2152,13 +2433,27 @@ private fun ArchiveEntryListItem(
       Spacer(modifier = Modifier.width(12.dp))
 
       Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = item.name,
-          style = MaterialTheme.typography.bodyLarge,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = item.name,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+          )
+          if (item.isEncrypted) {
+            Icon(
+              imageVector = if (isArchiveLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+              contentDescription = if (isArchiveLocked) "Encrypted (locked)" else "Encrypted (unlocked)",
+              tint = if (isArchiveLocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary,
+              modifier = Modifier.size(14.dp),
+            )
+          }
+        }
         Row(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalAlignment = Alignment.CenterVertically,
@@ -2248,6 +2543,7 @@ private fun ArchiveEntryListItem(
 @Composable
 private fun ArchiveEntryGridItem(
   item: ArchiveEntryItem,
+  isArchiveLocked: Boolean = false,
   isCompact: Boolean = false,
   isSelectionMode: Boolean,
   isSelected: Boolean,
@@ -2321,13 +2617,27 @@ private fun ArchiveEntryGridItem(
 
         Spacer(modifier = Modifier.height(if (isCompact) 4.dp else 8.dp))
 
-        Text(
-          text = item.name,
-          style = if (isCompact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodyMedium,
-          fontWeight = FontWeight.Medium,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          Text(
+            text = item.name,
+            style = if (isCompact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+          )
+          if (item.isEncrypted) {
+            Icon(
+              imageVector = if (isArchiveLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+              contentDescription = null,
+              tint = if (isArchiveLocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary,
+              modifier = Modifier.size(12.dp),
+            )
+          }
+        }
 
         if (!isCompact) {
           Text(
@@ -3029,9 +3339,12 @@ internal fun CreateZipArchiveDialog(
     outputFile: File,
     format: ArchiveFormat,
     compressionLevel: ArchiveCompressionLevel,
+    password: String?,
+    encryptionMethod: ArchiveEncryptionMethod,
   ) -> Unit,
 ) {
   val context = LocalContext.current
+  val haptic = LocalHapticFeedback.current
   val coroutineScope = rememberCoroutineScope()
   val rootDir = remember { FileManagerEngine.getUserRootDirectory() }
   val outputDir = remember(initialDirectory) {
@@ -3046,6 +3359,31 @@ internal fun CreateZipArchiveDialog(
   }
   var selectedFormat by rememberSaveable { mutableStateOf(ArchiveFormat.ZIP) }
   var compressionLevel by rememberSaveable { mutableStateOf(ArchiveCompressionLevel.BALANCED) }
+
+  // Password protection state
+  var encryptWithPassword by rememberSaveable { mutableStateOf(false) }
+  var encryptionMethod by rememberSaveable { mutableStateOf(ArchiveEncryptionMethod.AES_256) }
+  var passwordInput by rememberSaveable { mutableStateOf("") }
+  var confirmPasswordInput by rememberSaveable { mutableStateOf("") }
+  var isPasswordVisible by rememberSaveable { mutableStateOf(false) }
+  val passwordFocusRequester = remember { FocusRequester() }
+  val confirmFocusRequester = remember { FocusRequester() }
+
+  LaunchedEffect(encryptWithPassword) {
+    if (encryptWithPassword) {
+      runCatching { passwordFocusRequester.requestFocus() }
+    }
+  }
+
+  val passwordMismatchError = remember(encryptWithPassword, passwordInput, confirmPasswordInput) {
+    if (encryptWithPassword && confirmPasswordInput.isNotEmpty() && passwordInput != confirmPasswordInput) {
+      "Passwords do not match"
+    } else {
+      null
+    }
+  }
+  val isPasswordConfigValid = !encryptWithPassword ||
+    (passwordInput.isNotEmpty() && passwordInput == confirmPasswordInput)
 
   val defaultStem = remember(initialSelectedFiles) {
     if (initialSelectedFiles.size == 1) {
@@ -3108,7 +3446,7 @@ internal fun CreateZipArchiveDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.FolderZip,
+            imageVector = if (encryptWithPassword) Icons.Default.Lock else Icons.Default.FolderZip,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -3122,7 +3460,10 @@ internal fun CreateZipArchiveDialog(
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "${selectedFiles.size} ${if (selectedFiles.size == 1) "item" else "items"} selected",
+            text = buildString {
+              append("${selectedFiles.size} ${if (selectedFiles.size == 1) "item" else "items"} selected")
+              if (encryptWithPassword) append(" • ${encryptionMethod.shortLabel} encrypted")
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -3133,7 +3474,8 @@ internal fun CreateZipArchiveDialog(
       Column(
         modifier = Modifier
           .fillMaxWidth()
-          .heightIn(max = 460.dp),
+          .heightIn(max = 480.dp)
+          .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         // 1. Archive filename input
@@ -3159,7 +3501,12 @@ internal fun CreateZipArchiveDialog(
           for (fmt in writableFormats) {
             FilterChip(
               selected = selectedFormat == fmt,
-              onClick = { selectedFormat = fmt },
+              onClick = {
+                selectedFormat = fmt
+                if (!fmt.supportsPasswordEncryption && encryptWithPassword) {
+                  encryptWithPassword = false
+                }
+              },
               label = { Text(fmt.displayName) },
               shape = RoundedCornerShape(20.dp),
               modifier = Modifier.testTag("zip_format_chip_${fmt.name}"),
@@ -3179,6 +3526,180 @@ internal fun CreateZipArchiveDialog(
                 label = { Text(level.shortLabel, fontSize = 12.sp) },
                 shape = RoundedCornerShape(16.dp),
               )
+            }
+          }
+        }
+
+        // 2b. Password Encryption Toggle & Fields
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = if (encryptWithPassword) {
+              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+            } else {
+              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            },
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .clickable {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  val next = !encryptWithPassword
+                  encryptWithPassword = next
+                  if (next && !selectedFormat.supportsPasswordEncryption) {
+                    selectedFormat = ArchiveFormat.ZIP
+                  }
+                }
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .testTag("zip_encrypt_toggle"),
+            ) {
+              Icon(
+                imageVector = if (encryptWithPassword) Icons.Default.Lock else Icons.Default.LockOpen,
+                contentDescription = null,
+                tint = if (encryptWithPassword) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+              )
+              Spacer(modifier = Modifier.width(10.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Encrypt with password",
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = if (selectedFormat.supportsPasswordEncryption) {
+                    "AES-256 or ZipCrypto password protection"
+                  } else {
+                    "Switches format to .zip for password protection"
+                  },
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+              Checkbox(
+                checked = encryptWithPassword,
+                onCheckedChange = { checked ->
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  encryptWithPassword = checked
+                  if (checked && !selectedFormat.supportsPasswordEncryption) {
+                    selectedFormat = ArchiveFormat.ZIP
+                  }
+                },
+              )
+            }
+
+            AnimatedVisibility(
+              visible = encryptWithPassword && selectedFormat.supportsPasswordEncryption,
+              enter = expandVertically() + fadeIn(),
+              exit = shrinkVertically() + fadeOut(),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  for (method in ArchiveEncryptionMethod.creatableMethods) {
+                    FilterChip(
+                      selected = encryptionMethod == method,
+                      onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        encryptionMethod = method
+                      },
+                      label = { Text(method.displayName, fontSize = 12.sp) },
+                      shape = RoundedCornerShape(20.dp),
+                      modifier = Modifier.testTag("zip_encryption_chip_${method.name}"),
+                    )
+                  }
+                }
+
+                OutlinedTextField(
+                  value = passwordInput,
+                  onValueChange = { passwordInput = it },
+                  label = { Text("Password") },
+                  leadingIcon = {
+                    Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+                  },
+                  trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                      if (passwordInput.isNotEmpty()) {
+                        IconButton(
+                          onClick = {
+                            passwordInput = ""
+                            confirmPasswordInput = ""
+                          },
+                          modifier = Modifier.size(32.dp),
+                        ) {
+                          Icon(Icons.Default.Clear, contentDescription = "Clear password", modifier = Modifier.size(16.dp))
+                        }
+                      }
+                      IconButton(
+                        onClick = { isPasswordVisible = !isPasswordVisible },
+                        modifier = Modifier.size(32.dp),
+                      ) {
+                        Icon(
+                          imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                          contentDescription = if (isPasswordVisible) "Hide password" else "Show password",
+                          modifier = Modifier.size(18.dp),
+                        )
+                      }
+                    }
+                  },
+                  visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                  keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Next,
+                  ),
+                  keyboardActions = KeyboardActions(
+                    onNext = { runCatching { confirmFocusRequester.requestFocus() } },
+                  ),
+                  singleLine = true,
+                  shape = RoundedCornerShape(14.dp),
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(passwordFocusRequester)
+                    .testTag("zip_password_input"),
+                )
+
+                OutlinedTextField(
+                  value = confirmPasswordInput,
+                  onValueChange = { confirmPasswordInput = it },
+                  label = { Text("Confirm password") },
+                  leadingIcon = {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                  },
+                  visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                  keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done,
+                  ),
+                  isError = passwordMismatchError != null,
+                  supportingText = passwordMismatchError?.let { err ->
+                    { Text(err, color = MaterialTheme.colorScheme.error) }
+                  },
+                  singleLine = true,
+                  shape = RoundedCornerShape(14.dp),
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(confirmFocusRequester)
+                    .testTag("zip_confirm_password_input"),
+                )
+              }
             }
           }
         }
@@ -3215,7 +3736,7 @@ internal fun CreateZipArchiveDialog(
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .height(110.dp)
+              .height(96.dp)
               .clip(RoundedCornerShape(12.dp))
               .clickable { pickFilesForZipLauncher.launch(arrayOf("*/*")) },
           ) {
@@ -3231,13 +3752,11 @@ internal fun CreateZipArchiveDialog(
             }
           }
         } else {
-          LazyColumn(
-            modifier = Modifier
-              .fillMaxWidth()
-              .weight(1f, fill = false),
+          Column(
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
-            items(selectedFiles, key = { it.absolutePath }) { item ->
+            for (item in selectedFiles) {
               Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(
@@ -3297,15 +3816,26 @@ internal fun CreateZipArchiveDialog(
     confirmButton = {
       Button(
         onClick = {
-          onCreateArchive(selectedFiles, outputFile, selectedFormat, compressionLevel)
+          onCreateArchive(
+            selectedFiles,
+            outputFile,
+            selectedFormat,
+            compressionLevel,
+            if (encryptWithPassword && selectedFormat.supportsPasswordEncryption) passwordInput else null,
+            if (encryptWithPassword && selectedFormat.supportsPasswordEncryption) encryptionMethod else ArchiveEncryptionMethod.NONE,
+          )
         },
-        enabled = selectedFiles.isNotEmpty() && sanitizedStem.isNotEmpty(),
+        enabled = selectedFiles.isNotEmpty() && sanitizedStem.isNotEmpty() && isPasswordConfigValid,
         shape = CircleShape,
         modifier = Modifier.testTag("confirm_create_zip_button"),
       ) {
-        Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(18.dp))
+        Icon(
+          imageVector = if (encryptWithPassword) Icons.Default.Lock else Icons.Default.FolderZip,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
         Spacer(modifier = Modifier.width(6.dp))
-        Text("Zip (${selectedFiles.size})")
+        Text(if (encryptWithPassword) "Encrypt & Zip (${selectedFiles.size})" else "Zip (${selectedFiles.size})")
       }
     },
     dismissButton = {
@@ -3313,6 +3843,483 @@ internal fun CreateZipArchiveDialog(
         onClick = onDismiss,
         shape = CircleShape,
       ) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+private fun UnlockArchivePasswordDialog(
+  archiveInfo: ArchiveInfo,
+  onDismiss: () -> Unit,
+  onUnlocked: (String) -> Unit,
+) {
+  val coroutineScope = rememberCoroutineScope()
+  val focusRequester = remember { FocusRequester() }
+  var passwordInput by rememberSaveable { mutableStateOf("") }
+  var isPasswordVisible by rememberSaveable { mutableStateOf(false) }
+  var isVerifying by remember { mutableStateOf(false) }
+  var errorMessage by remember { mutableStateOf<String?>(null) }
+
+  LaunchedEffect(Unit) {
+    runCatching { focusRequester.requestFocus() }
+  }
+
+  fun submitPassword() {
+    if (passwordInput.isEmpty() || isVerifying) return
+    isVerifying = true
+    errorMessage = null
+    val candidate = passwordInput
+    coroutineScope.launch {
+      val checkResult = withContext(Dispatchers.IO) {
+        ArchiveEngine.verifyArchivePassword(archiveInfo.file, candidate)
+      }
+      isVerifying = false
+      checkResult.fold(
+        onSuccess = { valid ->
+          if (valid) {
+            onUnlocked(candidate)
+          } else {
+            errorMessage = "Incorrect password — please try again"
+          }
+        },
+        onFailure = { err ->
+          errorMessage = err.message ?: "Could not verify archive password"
+        },
+      )
+    }
+  }
+
+  AlertDialog(
+    onDismissRequest = { if (!isVerifying) onDismiss() },
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("unlock_archive_password_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "Password Required",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Enter password to unlock & extract entries",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.FolderZip,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(22.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = archiveInfo.file.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = "${archiveInfo.encryptionMethod.displayName} • ${archiveInfo.totalFileCount} ${if (archiveInfo.totalFileCount == 1) "file" else "files"} • ${FileManagerEngine.formatFileSize(archiveInfo.archiveFileSizeBytes)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+
+        OutlinedTextField(
+          value = passwordInput,
+          onValueChange = {
+            passwordInput = it
+            if (errorMessage != null) errorMessage = null
+          },
+          label = { Text("Archive password") },
+          leadingIcon = {
+            Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+          },
+          trailingIcon = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              if (passwordInput.isNotEmpty()) {
+                IconButton(
+                  onClick = {
+                    passwordInput = ""
+                    errorMessage = null
+                  },
+                  modifier = Modifier.size(32.dp),
+                ) {
+                  Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                }
+              }
+              IconButton(
+                onClick = { isPasswordVisible = !isPasswordVisible },
+                modifier = Modifier.size(32.dp),
+              ) {
+                Icon(
+                  imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                  contentDescription = if (isPasswordVisible) "Hide password" else "Show password",
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+          },
+          visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+          keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Password,
+            imeAction = ImeAction.Done,
+          ),
+          keyboardActions = KeyboardActions(
+            onDone = { submitPassword() },
+          ),
+          isError = errorMessage != null,
+          supportingText = errorMessage?.let { err ->
+            { Text(err, color = MaterialTheme.colorScheme.error) }
+          },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester)
+            .testTag("unlock_archive_password_input"),
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = { submitPassword() },
+        enabled = passwordInput.isNotEmpty() && !isVerifying,
+        shape = CircleShape,
+        modifier = Modifier.testTag("confirm_unlock_archive_button"),
+      ) {
+        if (isVerifying) {
+          CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onPrimary,
+          )
+        } else {
+          Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Unlock")
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        enabled = !isVerifying,
+        shape = CircleShape,
+      ) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+private fun ManageArchivePasswordDialog(
+  archiveInfo: ArchiveInfo,
+  currentUnlockedPassword: String?,
+  onDismiss: () -> Unit,
+  onApplyPasswordChange: (
+    currentPassword: String?,
+    newPassword: String?,
+    encryptionMethod: ArchiveEncryptionMethod,
+  ) -> Unit,
+) {
+  val haptic = LocalHapticFeedback.current
+  val focusRequester = remember { FocusRequester() }
+  var selectedMethod by rememberSaveable {
+    mutableStateOf(
+      if (archiveInfo.encryptionMethod in ArchiveEncryptionMethod.creatableMethods) {
+        archiveInfo.encryptionMethod
+      } else {
+        ArchiveEncryptionMethod.AES_256
+      }
+    )
+  }
+  var newPassword by rememberSaveable { mutableStateOf("") }
+  var confirmPassword by rememberSaveable { mutableStateOf("") }
+  var isPasswordVisible by rememberSaveable { mutableStateOf(false) }
+
+  LaunchedEffect(Unit) {
+    runCatching { focusRequester.requestFocus() }
+  }
+
+  val mismatchError = remember(newPassword, confirmPassword) {
+    if (confirmPassword.isNotEmpty() && newPassword != confirmPassword) {
+      "Passwords do not match"
+    } else {
+      null
+    }
+  }
+  val canSaveNewPassword = newPassword.isNotEmpty() && newPassword == confirmPassword
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("manage_archive_password_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = if (archiveInfo.isEncrypted) "Password Protection" else "Encrypt Archive",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = if (archiveInfo.isEncrypted) {
+              "Update password or remove encryption"
+            } else {
+              "Protect this .zip archive with a password"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Icon(
+              imageVector = if (archiveInfo.isEncrypted) Icons.Default.Lock else Icons.Default.FolderZip,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(22.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = archiveInfo.file.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = if (archiveInfo.isEncrypted) {
+                  "Protected • ${archiveInfo.encryptionMethod.displayName}"
+                } else {
+                  "Unencrypted • ${archiveInfo.totalFileCount} ${if (archiveInfo.totalFileCount == 1) "file" else "files"}"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          for (method in ArchiveEncryptionMethod.creatableMethods) {
+            FilterChip(
+              selected = selectedMethod == method,
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                selectedMethod = method
+              },
+              label = { Text(method.displayName, fontSize = 12.sp) },
+              shape = RoundedCornerShape(20.dp),
+              modifier = Modifier.testTag("manage_encryption_chip_${method.name}"),
+            )
+          }
+        }
+
+        OutlinedTextField(
+          value = newPassword,
+          onValueChange = { newPassword = it },
+          label = { Text(if (archiveInfo.isEncrypted) "New password" else "Password") },
+          leadingIcon = {
+            Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+          },
+          trailingIcon = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              if (newPassword.isNotEmpty()) {
+                IconButton(
+                  onClick = {
+                    newPassword = ""
+                    confirmPassword = ""
+                  },
+                  modifier = Modifier.size(32.dp),
+                ) {
+                  Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                }
+              }
+              IconButton(
+                onClick = { isPasswordVisible = !isPasswordVisible },
+                modifier = Modifier.size(32.dp),
+              ) {
+                Icon(
+                  imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                  contentDescription = if (isPasswordVisible) "Hide password" else "Show password",
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+          },
+          visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+          keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Password,
+            imeAction = ImeAction.Next,
+          ),
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester)
+            .testTag("manage_archive_password_input"),
+        )
+
+        OutlinedTextField(
+          value = confirmPassword,
+          onValueChange = { confirmPassword = it },
+          label = { Text("Confirm password") },
+          leadingIcon = {
+            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+          },
+          visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+          keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Password,
+            imeAction = ImeAction.Done,
+          ),
+          isError = mismatchError != null,
+          supportingText = mismatchError?.let { err ->
+            { Text(err, color = MaterialTheme.colorScheme.error) }
+          },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("manage_archive_confirm_password_input"),
+        )
+
+        if (archiveInfo.isEncrypted) {
+          OutlinedButton(
+            onClick = {
+              onApplyPasswordChange(currentUnlockedPassword, null, ArchiveEncryptionMethod.NONE)
+            },
+            shape = CircleShape,
+            colors = ButtonDefaults.outlinedButtonColors(
+              contentColor = MaterialTheme.colorScheme.error,
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("remove_archive_password_button"),
+          ) {
+            Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Remove Password Protection")
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = {
+          onApplyPasswordChange(currentUnlockedPassword, newPassword, selectedMethod)
+        },
+        enabled = canSaveNewPassword,
+        shape = CircleShape,
+        modifier = Modifier.testTag("confirm_manage_password_button"),
+      ) {
+        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(if (archiveInfo.isEncrypted) "Update Password" else "Encrypt")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss, shape = CircleShape) {
         Text("Cancel")
       }
     },
@@ -3608,6 +4615,10 @@ private fun ArchiveEntryDetailsDialog(
           "${FileManagerEngine.formatFileSize(item.compressedSizeBytes)} (${item.compressedSizeBytes} B)",
         )
         if (!item.isDirectory) {
+          ArchiveDetailRow(
+            "Encryption",
+            if (item.isEncrypted) "Password Protected (${item.encryptionMethod.displayName})" else "None",
+          )
           ArchiveDetailRow("Space saved", "${item.compressionRatioPercent}%")
           if (item.crc32 != 0L) {
             ArchiveDetailRow("CRC-32", item.crc32.toString(16).uppercase(Locale.ROOT).padStart(8, '0'))
@@ -3717,7 +4728,9 @@ private fun ArchiveBulkInfoDialog(
 @Composable
 private fun ArchiveContainerInfoDialog(
   archiveInfo: ArchiveInfo,
+  isLocked: Boolean = false,
   onDismiss: () -> Unit,
+  onManagePassword: (() -> Unit)? = null,
   onShareArchive: () -> Unit,
 ) {
   AlertDialog(
@@ -3738,7 +4751,7 @@ private fun ArchiveContainerInfoDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.FolderZip,
+            imageVector = if (archiveInfo.isEncrypted) Icons.Default.Lock else Icons.Default.FolderZip,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -3753,7 +4766,12 @@ private fun ArchiveContainerInfoDialog(
             overflow = TextOverflow.Ellipsis,
           )
           Text(
-            text = "${archiveInfo.format.displayName} Archive",
+            text = buildString {
+              append("${archiveInfo.format.displayName} Archive")
+              if (archiveInfo.isEncrypted) {
+                append(" • ${archiveInfo.encryptionMethod.shortLabel}")
+              }
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -3764,6 +4782,14 @@ private fun ArchiveContainerInfoDialog(
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ArchiveDetailRow("Location", archiveInfo.file.absolutePath)
         ArchiveDetailRow("Format", "${archiveInfo.format.displayName} (.${archiveInfo.format.extension})")
+        ArchiveDetailRow(
+          "Encryption",
+          if (archiveInfo.isEncrypted) {
+            "Password Protected (${archiveInfo.encryptionMethod.displayName}) • ${if (isLocked) "Locked" else "Unlocked"}"
+          } else {
+            "None (Unencrypted)"
+          },
+        )
         ArchiveDetailRow("Total files", "${archiveInfo.totalFileCount}")
         ArchiveDetailRow("Total folders", "${archiveInfo.totalFolderCount}")
         ArchiveDetailRow(
@@ -3775,6 +4801,29 @@ private fun ArchiveContainerInfoDialog(
           FileManagerEngine.formatFileSize(archiveInfo.totalUncompressedBytes),
         )
         ArchiveDetailRow("Overall compression", "${archiveInfo.overallCompressionPercent}% saved")
+
+        if (onManagePassword != null) {
+          Spacer(modifier = Modifier.height(4.dp))
+          OutlinedButton(
+            onClick = onManagePassword,
+            shape = CircleShape,
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Icon(
+              imageVector = if (archiveInfo.isEncrypted && isLocked) Icons.Default.LockOpen else Icons.Default.Lock,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+              when {
+                archiveInfo.isEncrypted && isLocked -> "Unlock Archive"
+                archiveInfo.isEncrypted -> "Change or Remove Password"
+                else -> "Encrypt with Password"
+              }
+            )
+          }
+        }
       }
     },
     confirmButton = {
@@ -3821,12 +4870,13 @@ private fun ArchiveDetailRow(label: String, value: String) {
 private fun ArchiveTextPreviewDialog(
   archiveFile: File,
   entry: ArchiveEntryItem,
+  password: String? = null,
   onDismiss: () -> Unit,
   onExtract: () -> Unit,
 ) {
   val context = LocalContext.current
-  val textContent = remember(archiveFile.absolutePath, entry.archivePath) {
-    ArchiveEngine.readEntryText(archiveFile, entry.archivePath) ?: ""
+  val textContent = remember(archiveFile.absolutePath, entry.archivePath, password) {
+    ArchiveEngine.readEntryText(archiveFile, entry.archivePath, password = password) ?: ""
   }
 
   Dialog(
@@ -3914,13 +4964,14 @@ private fun ArchiveTextPreviewDialog(
 private fun ArchiveImagePreviewDialog(
   archiveFile: File,
   entry: ArchiveEntryItem,
+  password: String? = null,
   onDismiss: () -> Unit,
   onExtract: () -> Unit,
   onShare: () -> Unit,
 ) {
-  val bitmap = remember(archiveFile.absolutePath, entry.archivePath) {
+  val bitmap = remember(archiveFile.absolutePath, entry.archivePath, password) {
     try {
-      val bytes = ArchiveEngine.readEntryBytes(archiveFile, entry.archivePath)
+      val bytes = ArchiveEngine.readEntryBytes(archiveFile, entry.archivePath, password = password)
       if (bytes != null && bytes.isNotEmpty()) {
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
       } else {

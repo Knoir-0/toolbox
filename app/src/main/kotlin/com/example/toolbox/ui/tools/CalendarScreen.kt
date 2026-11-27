@@ -60,6 +60,7 @@ import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -76,6 +77,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -100,6 +102,7 @@ import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -134,6 +137,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.toolbox.ui.main.AppPermission
 import com.example.toolbox.ui.main.NavigationPreferencesBridge
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.theme.Button
@@ -145,7 +152,9 @@ import com.example.toolbox.ui.theme.TextButton
 import com.example.toolbox.ui.theme.ToolboxTheme
 import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import com.example.toolbox.ui.theme.toolboxScreenBackground
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.TimeZone
 import java.util.UUID
@@ -218,14 +227,98 @@ fun CalendarScreen(
   }
 
   var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+  val lifecycleOwner = LocalLifecycleOwner.current
   val notificationPermissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission(),
   ) { _ -> }
+
+  var hasReadCalendarPermission by remember {
+    mutableStateOf(!isInspection && DeviceCalendarHelper.hasReadPermission(context))
+  }
+  var hasWriteCalendarPermission by remember {
+    mutableStateOf(!isInspection && DeviceCalendarHelper.hasWritePermission(context))
+  }
+  var syncDeviceCalendars by remember { mutableStateOf(repo.getSyncDeviceCalendars()) }
+  var storedEnabledDeviceCalendarIds by remember { mutableStateOf(repo.getEnabledDeviceCalendarIds()) }
+  var preferredTargetCalendarId by remember { mutableStateOf(repo.getPreferredTargetCalendarId()) }
+  var favoriteEventKeys by remember { mutableStateOf(repo.getFavoriteEventKeys()) }
+  var deviceCalendars by remember { mutableStateOf<List<DeviceCalendarInfo>>(emptyList()) }
+  var deviceEvents by remember { mutableStateOf<List<CalendarEvent>>(emptyList()) }
+  var deviceCalendarRefreshTick by remember { mutableIntStateOf(0) }
+  var dismissedPermissionBanner by rememberSaveable { mutableStateOf(false) }
+
+  val calendarPermissionsLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestMultiplePermissions(),
+  ) { _ ->
+    val readGranted = DeviceCalendarHelper.hasReadPermission(context)
+    val writeGranted = DeviceCalendarHelper.hasWritePermission(context)
+    hasReadCalendarPermission = readGranted
+    hasWriteCalendarPermission = writeGranted
+    if (readGranted) {
+      deviceCalendarRefreshTick++
+      CalendarWidgets.updateAllWidgets(context)
+    } else if (!DeviceCalendarHelper.hasOsReadPermission(context) && repo.hasPromptedDeviceCalendarPermission()) {
+      // If system permission is permanently denied and user explicitly clicked Grant Access, offer Settings fallback
+    }
+  }
+
+  fun requestDeviceCalendarAccess(openSettingsIfAlreadyDenied: Boolean = false) {
+    if (isInspection) return
+    if (!NavigationPreferencesBridge.isPermissionGranted(AppPermission.CALENDAR)) {
+      NavigationPreferencesBridge.activeRepository?.grantPermission(AppPermission.CALENDAR)
+    }
+    val osRead = DeviceCalendarHelper.hasOsReadPermission(context)
+    val osWrite = DeviceCalendarHelper.hasOsWritePermission(context)
+    if (osRead && osWrite) {
+      hasReadCalendarPermission = true
+      hasWriteCalendarPermission = true
+      syncDeviceCalendars = true
+      repo.setSyncDeviceCalendars(true)
+      deviceCalendarRefreshTick++
+      CalendarWidgets.updateAllWidgets(context)
+      return
+    }
+    val hadPromptedBefore = repo.hasPromptedDeviceCalendarPermission()
+    repo.setHasPromptedDeviceCalendarPermission(true)
+    try {
+      calendarPermissionsLauncher.launch(
+        arrayOf(
+          Manifest.permission.READ_CALENDAR,
+          Manifest.permission.WRITE_CALENDAR,
+        )
+      )
+    } catch (_: Throwable) {
+      if (openSettingsIfAlreadyDenied || hadPromptedBefore) {
+        openAppPermissionSystemSettings(context, AppPermission.CALENDAR)
+      }
+    }
+  }
+
+  DisposableEffect(lifecycleOwner, isInspection) {
+    if (isInspection) {
+      onDispose {}
+    } else {
+      val observer = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          hasReadCalendarPermission = DeviceCalendarHelper.hasReadPermission(context)
+          hasWriteCalendarPermission = DeviceCalendarHelper.hasWritePermission(context)
+          deviceCalendarRefreshTick++
+        }
+      }
+      lifecycleOwner.lifecycle.addObserver(observer)
+      onDispose {
+        lifecycleOwner.lifecycle.removeObserver(observer)
+      }
+    }
+  }
 
   LaunchedEffect(Unit) {
     if (!isInspection) {
       CalendarNotificationHelper.ensureNotificationChannel(context)
       CalendarNotificationHelper.syncEventAlarms(context, repo.loadEvents())
+      if (repository == null && !hasReadCalendarPermission && !repo.hasPromptedDeviceCalendarPermission()) {
+        requestDeviceCalendarAccess()
+      }
     }
     while (true) {
       delay(30_000L)
@@ -255,6 +348,60 @@ fun CalendarScreen(
   var showTodos by remember { mutableStateOf(repo.getShowTodos()) }
   var showHolidays by remember { mutableStateOf(repo.getShowHolidays()) }
 
+  // Load device calendars & expanded event instances off the main thread whenever permission, year, or filter changes
+  LaunchedEffect(
+    isInspection,
+    hasReadCalendarPermission,
+    syncDeviceCalendars,
+    selectedYear,
+    storedEnabledDeviceCalendarIds,
+    favoriteEventKeys,
+    deviceCalendarRefreshTick,
+  ) {
+    if (isInspection || !hasReadCalendarPermission) {
+      deviceCalendars = emptyList()
+      deviceEvents = emptyList()
+      return@LaunchedEffect
+    }
+    val (loadedCalendars, loadedEvents) = withContext(Dispatchers.IO) {
+      val cals = DeviceCalendarHelper.queryDeviceCalendars(context)
+      if (!syncDeviceCalendars || cals.isEmpty()) {
+        cals to emptyList()
+      } else {
+        val enabledIds = CalendarEngine.resolveActiveDeviceCalendarIds(cals, storedEnabledDeviceCalendarIds)
+        if (enabledIds.isEmpty()) {
+          cals to emptyList()
+        } else {
+          val rangeStart = CalendarDay(selectedYear - 1, 1, 1).plusDays(-7).toStartOfDayMillis()
+          val rangeEnd = CalendarDay(selectedYear + 1, 12, 31).plusDays(7).toEndOfDayMillis()
+          val evs = DeviceCalendarHelper.queryEventsInRange(
+            context = context,
+            rangeStartMillis = rangeStart,
+            rangeEndMillis = rangeEnd,
+            calendarsById = cals.associateBy { it.id },
+            enabledCalendarIds = enabledIds,
+            favoriteKeys = favoriteEventKeys,
+          )
+          cals to evs
+        }
+      }
+    }
+    deviceCalendars = loadedCalendars
+    deviceEvents = loadedEvents
+  }
+
+  val activeDeviceCalendarIds = remember(deviceCalendars, storedEnabledDeviceCalendarIds, syncDeviceCalendars) {
+    if (!syncDeviceCalendars) {
+      emptySet()
+    } else {
+      CalendarEngine.resolveActiveDeviceCalendarIds(deviceCalendars, storedEnabledDeviceCalendarIds)
+    }
+  }
+
+  val writableDeviceCalendars = remember(deviceCalendars, hasWriteCalendarPermission) {
+    if (!hasWriteCalendarPermission) emptyList() else deviceCalendars.filter { it.isWritable }
+  }
+
   val projectedTodoEvents = remember(showTodos, selectedYear, selectedMonth, userEvents) {
     if (!showTodos) {
       emptyList()
@@ -278,14 +425,15 @@ fun CalendarScreen(
     }
   }
 
-  val allEvents = remember(userEvents, projectedTodoEvents, builtInHolidays) {
-    userEvents + projectedTodoEvents + builtInHolidays
+  val allEvents = remember(userEvents, deviceEvents, projectedTodoEvents, builtInHolidays) {
+    userEvents + deviceEvents + projectedTodoEvents + builtInHolidays
   }
 
   // Search & Catalog Overlay State (Section 5.7 of DESIGN_LANGUAGE.md)
   var isSearchActive by rememberSaveable { mutableStateOf(false) }
   var searchQuery by rememberSaveable { mutableStateOf("") }
   var searchCategoryFilterName by rememberSaveable { mutableStateOf<String?>(null) }
+  var searchDeviceCalendarIdFilter by rememberSaveable { mutableStateOf<Long?>(null) }
   var searchFavoritesOnly by rememberSaveable { mutableStateOf(false) }
 
   val searchCategoryFilter = remember(searchCategoryFilterName) {
@@ -312,6 +460,7 @@ fun CalendarScreen(
     isSearchActive = false
     searchQuery = ""
     searchCategoryFilterName = null
+    searchDeviceCalendarIdFilter = null
     searchFavoritesOnly = false
     focusManager.clearFocus()
   }
@@ -321,15 +470,21 @@ fun CalendarScreen(
     selectedEventIds = emptySet()
   }
 
+  val selectableUserEvents = remember(userEvents, deviceEvents) {
+    userEvents + deviceEvents.filter { !it.isReadOnlyBuiltIn }
+  }
+
   fun persistEvents(updated: List<CalendarEvent>) {
-    val clean = updated.filter { !it.isBuiltInHoliday && it.linkedTodoTaskId == null }
+    val clean = updated.filter {
+      !it.isBuiltInHoliday && it.linkedTodoTaskId == null && !it.isDeviceCalendarEvent
+    }
     userEvents = clean
     repo.saveEvents(clean)
     if (!isInspection) {
       CalendarNotificationHelper.syncEventAlarms(context, clean)
       CalendarWidgets.updateAllWidgets(context)
     }
-    val remainingIds = clean.map { it.id }.toSet()
+    val remainingIds = (clean.map { it.id } + deviceEvents.filter { !it.isReadOnlyBuiltIn }.map { it.id }).toSet()
     selectedEventIds = selectedEventIds.intersect(remainingIds)
     if (selectedEventIds.isEmpty()) {
       isSelectionMode = false
@@ -339,10 +494,24 @@ fun CalendarScreen(
   fun toggleEventFavorite(event: CalendarEvent) {
     if (event.isReadOnlyBuiltIn) return
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    val updated = userEvents.map {
-      if (it.id == event.id) it.copy(isFavorite = !it.isFavorite) else it
+    if (event.isDeviceCalendarEvent) {
+      val favKey = event.favoriteKey
+      val isNowFavorite = favKey !in favoriteEventKeys
+      val updatedKeys = if (isNowFavorite) favoriteEventKeys + favKey else favoriteEventKeys - favKey
+      favoriteEventKeys = updatedKeys
+      repo.setFavoriteEventKeys(updatedKeys)
+      deviceEvents = deviceEvents.map {
+        if (it.favoriteKey == favKey) it.copy(isFavorite = isNowFavorite) else it
+      }
+      if (!isInspection) {
+        CalendarWidgets.updateAllWidgets(context)
+      }
+    } else {
+      val updated = userEvents.map {
+        if (it.id == event.id) it.copy(isFavorite = !it.isFavorite) else it
+      }
+      persistEvents(updated)
     }
-    persistEvents(updated)
   }
 
   fun toggleEventSelection(eventId: String) {
@@ -370,12 +539,19 @@ fun CalendarScreen(
   fun openEditEventDialog(event: CalendarEvent) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     if (event.isReadOnlyBuiltIn) {
-      // Built-in holiday or To-Do task -> duplicate as custom editable event
+      // Built-in holiday, To-Do task, or read-only device calendar -> duplicate as custom editable event
       editingEvent = null
       prefillEvent = event.copy(
         id = UUID.randomUUID().toString(),
         isBuiltInHoliday = false,
         linkedTodoTaskId = null,
+        deviceCalendarId = null,
+        deviceEventId = null,
+        deviceCalendarName = null,
+        deviceAccountName = null,
+        deviceCalendarColorArgb = null,
+        isDeviceEventWritable = true,
+        isPreExpandedInstance = false,
         category = if (event.category == CalendarCategory.HOLIDAYS || event.category == CalendarCategory.TASKS) {
           CalendarCategory.PERSONAL
         } else {
@@ -391,19 +567,61 @@ fun CalendarScreen(
 
   fun duplicateEvents(eventsToCopy: List<CalendarEvent>) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    val copies = eventsToCopy.map { orig ->
-      orig.copy(
+    val localCopies = mutableListOf<CalendarEvent>()
+    var deviceCopiedCount = 0
+    val writableById = writableDeviceCalendars.associateBy { it.id }
+
+    eventsToCopy.forEach { orig ->
+      val copyEvent = orig.copy(
         id = UUID.randomUUID().toString(),
         title = "${orig.title} (Copy)",
         isBuiltInHoliday = false,
         linkedTodoTaskId = null,
         notifiedTriggerMillis = null,
+        isPreExpandedInstance = false,
       )
+      val targetCal = orig.deviceCalendarId?.let { writableById[it] }
+      if (!isInspection && targetCal != null && DeviceCalendarHelper.hasWritePermission(context)) {
+        val insertedId = DeviceCalendarHelper.insertDeviceEvent(context, copyEvent, targetCal)
+        if (insertedId != null) {
+          deviceCopiedCount++
+        } else {
+          localCopies.add(
+            copyEvent.copy(
+              deviceCalendarId = null,
+              deviceEventId = null,
+              deviceCalendarName = null,
+              deviceAccountName = null,
+              deviceCalendarColorArgb = null,
+            )
+          )
+        }
+      } else {
+        localCopies.add(
+          copyEvent.copy(
+            deviceCalendarId = null,
+            deviceEventId = null,
+            deviceCalendarName = null,
+            deviceAccountName = null,
+            deviceCalendarColorArgb = null,
+          )
+        )
+      }
     }
-    persistEvents(copies + userEvents)
+
+    if (localCopies.isNotEmpty()) {
+      persistEvents(localCopies + userEvents)
+    }
+    if (deviceCopiedCount > 0) {
+      deviceCalendarRefreshTick++
+      if (!isInspection) {
+        CalendarWidgets.updateAllWidgets(context)
+      }
+    }
+    val totalCopied = localCopies.size + deviceCopiedCount
     Toast.makeText(
       context,
-      if (copies.size == 1) "Duplicated \"${copies.first().title}\"" else "Duplicated ${copies.size} events",
+      if (totalCopied == 1) "Duplicated \"${eventsToCopy.first().title} (Copy)\"" else "Duplicated $totalCopied events",
       Toast.LENGTH_SHORT,
     ).show()
   }
@@ -434,11 +652,14 @@ fun CalendarScreen(
     }
   }
 
-  val selectedDayOccurrences = remember(allEvents, selectedDay, enabledCategories) {
-    CalendarEngine.occurrencesForDay(allEvents, selectedDay, enabledCategories)
+  val selectedDayOccurrences = remember(allEvents, selectedDay, enabledCategories, activeDeviceCalendarIds) {
+    CalendarEngine.occurrencesForDay(
+      events = allEvents,
+      day = selectedDay,
+      enabledCategories = enabledCategories,
+      enabledDeviceCalendarIds = if (hasReadCalendarPermission) activeDeviceCalendarIds else null,
+    )
   }
-
-  val selectableUserEvents = remember(userEvents) { userEvents }
 
   val topBarTitle = remember(selectedDay, viewMode) {
     when (viewMode) {
@@ -498,7 +719,7 @@ fun CalendarScreen(
       titleTestTag = "calendar_top_bar_title",
       subtextTestTag = "calendar_top_bar_subtext",
       selectionState = if (isSelectionMode) {
-        val selectedItems = userEvents.filter { it.id in selectedEventIds }
+        val selectedItems = selectableUserEvents.filter { it.id in selectedEventIds }
         ToolboxTopBarSelectionState(
           selectedCount = selectedEventIds.size,
           totalCount = selectableUserEvents.size,
@@ -751,6 +972,9 @@ fun CalendarScreen(
       ),
     )
 
+    val isAnyCalendarFiltered = enabledCategories.size < CalendarCategory.entries.size ||
+      (hasReadCalendarPermission && (!syncDeviceCalendars || activeDeviceCalendarIds.size < deviceCalendars.size))
+
     // 2. View Mode & Calendars Filter Pill Bar (Section 5.4 ToolboxPillNavigationBar)
     ToolboxPillNavigationBar(
       barTestTag = "calendar_view_mode_pill_bar",
@@ -763,7 +987,7 @@ fun CalendarScreen(
             showFilterCalendarsDialog = true
           },
           shape = CircleShape,
-          color = if (enabledCategories.size < CalendarCategory.entries.size) {
+          color = if (isAnyCalendarFiltered) {
             MaterialTheme.colorScheme.primaryContainer
           } else {
             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
@@ -776,7 +1000,7 @@ fun CalendarScreen(
             Icon(
               imageVector = Icons.Default.FilterList,
               contentDescription = "Filter calendars",
-              tint = if (enabledCategories.size < CalendarCategory.entries.size) {
+              tint = if (isAnyCalendarFiltered) {
                 MaterialTheme.colorScheme.primary
               } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
@@ -808,22 +1032,102 @@ fun CalendarScreen(
       }
     }
 
-    // 3. Main Content Box + Top-Expanding Search Catalog Overlay (Section 5.7)
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .swipeToSwitchPillView(
-          items = CalendarViewMode.entries,
-          selectedItem = viewMode,
-          enabled = !isSearchActive && !isSelectionMode,
-          onSelectItem = { mode ->
-            viewMode = mode
-            repo.setViewMode(mode)
-          },
-        ),
+    // Optional dismissible banner to grant device calendar access when not yet connected
+    AnimatedVisibility(
+      visible = !isInspection &&
+        repository == null &&
+        !hasReadCalendarPermission &&
+        !dismissedPermissionBanner &&
+        !isSearchActive &&
+        !isSelectionMode,
     ) {
-      when (viewMode) {
+      Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 12.dp, vertical = 4.dp)
+          .testTag("calendar_device_permission_banner"),
+      ) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(36.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Sync,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "Sync Device Calendars",
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Read, filter & save events on your Android calendars",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Button(
+            onClick = {
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              requestDeviceCalendarAccess(openSettingsIfAlreadyDenied = true)
+            },
+            shape = CircleShape,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.testTag("calendar_banner_connect_button"),
+          ) {
+            Text("Connect", style = MaterialTheme.typography.labelMedium)
+          }
+          IconButton(
+            onClick = { dismissedPermissionBanner = true },
+            modifier = Modifier.size(30.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Close,
+              contentDescription = "Dismiss",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(16.dp),
+            )
+          }
+        }
+      }
+    }
+
+    // 3. Main Content Box + Top-Expanding Search Catalog Overlay (Section 5.7)
+    Box(modifier = Modifier.fillMaxSize()) {
+      ToolboxPillHorizontalPager(
+        items = CalendarViewMode.entries,
+        selectedItem = viewMode,
+        enabled = !isSearchActive && !isSelectionMode,
+        key = { _, mode -> mode.name },
+        onSelectItem = { mode ->
+          viewMode = mode
+          repo.setViewMode(mode)
+        },
+        modifier = Modifier.fillMaxSize(),
+      ) { pageMode ->
+      when (pageMode) {
         CalendarViewMode.MONTH -> {
+          val effectiveDeviceIds = if (hasReadCalendarPermission) activeDeviceCalendarIds else null
           GoogleCalendarMonthView(
             year = selectedDay.year,
             month = selectedDay.month,
@@ -831,6 +1135,7 @@ fun CalendarScreen(
             today = today,
             allEvents = allEvents,
             enabledCategories = enabledCategories,
+            enabledDeviceCalendarIds = effectiveDeviceIds,
             isDarkTheme = isDarkTheme,
             isSelectionMode = isSelectionMode,
             selectedEventIds = selectedEventIds,
@@ -862,8 +1167,8 @@ fun CalendarScreen(
         }
 
         CalendarViewMode.DAY, CalendarViewMode.WEEK -> {
-          val timelineDays = remember(selectedDay, viewMode) {
-            when (viewMode) {
+          val timelineDays = remember(selectedDay, pageMode) {
+            when (pageMode) {
               CalendarViewMode.DAY -> listOf(selectedDay)
               CalendarViewMode.WEEK -> CalendarEngine.buildWeekDays(selectedDay)
               else -> listOf(selectedDay)
@@ -876,6 +1181,7 @@ fun CalendarScreen(
             nowMillis = nowMillis,
             allEvents = allEvents,
             enabledCategories = enabledCategories,
+            enabledDeviceCalendarIds = if (hasReadCalendarPermission) activeDeviceCalendarIds else null,
             isDarkTheme = isDarkTheme,
             onSelectDay = { day ->
               haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -901,6 +1207,7 @@ fun CalendarScreen(
             nowMillis = nowMillis,
             allEvents = allEvents,
             enabledCategories = enabledCategories,
+            enabledDeviceCalendarIds = if (hasReadCalendarPermission) activeDeviceCalendarIds else null,
             isDarkTheme = isDarkTheme,
             isSelectionMode = isSelectionMode,
             selectedEventIds = selectedEventIds,
@@ -925,6 +1232,7 @@ fun CalendarScreen(
           )
         }
       }
+      }
 
       // Integrated Expanding Search Catalog Overlay (Section 5.7)
       this@Column.AnimatedVisibility(
@@ -935,26 +1243,22 @@ fun CalendarScreen(
           .fillMaxSize()
           .zIndex(20f),
       ) {
-        val matchingEvents = remember(
-          allEvents,
-          searchQuery,
-          searchCategoryFilter,
-          searchFavoritesOnly,
-        ) {
-          CalendarEngine.searchEvents(
-            events = allEvents,
-            query = searchQuery,
-            categoryFilter = searchCategoryFilter,
-            favoritesOnly = searchFavoritesOnly,
-          )
+        val enabledDeviceCalendarsForSearch = remember(deviceCalendars, activeDeviceCalendarIds) {
+          deviceCalendars.filter { it.id in activeDeviceCalendarIds }
         }
 
-        val searchFilterPillIndices = remember {
-          (0 until (2 + CalendarCategory.entries.size)).toList()
+        val totalSearchPills = 2 + enabledDeviceCalendarsForSearch.size + CalendarCategory.entries.size
+        val searchFilterPillIndices = remember(totalSearchPills) {
+          (0 until totalSearchPills).toList()
         }
         val activeSearchFilterPillIndex = when {
           searchFavoritesOnly -> 1
-          searchCategoryFilter != null -> 2 + CalendarCategory.entries.indexOf(searchCategoryFilter)
+          searchDeviceCalendarIdFilter != null -> {
+            val devIdx = enabledDeviceCalendarsForSearch.indexOfFirst { it.id == searchDeviceCalendarIdFilter }
+            if (devIdx >= 0) 2 + devIdx else 0
+          }
+          searchCategoryFilter != null ->
+            2 + enabledDeviceCalendarsForSearch.size + CalendarCategory.entries.indexOf(searchCategoryFilter)
           else -> 0
         }
 
@@ -962,29 +1266,6 @@ fun CalendarScreen(
           color = MaterialTheme.colorScheme.background,
           modifier = Modifier
             .fillMaxSize()
-            .swipeToSwitchPillView(
-              items = searchFilterPillIndices,
-              selectedItem = activeSearchFilterPillIndex,
-              onSelectItem = { idx ->
-                when (idx) {
-                  0 -> {
-                    searchCategoryFilterName = null
-                    searchFavoritesOnly = false
-                  }
-                  1 -> {
-                    searchCategoryFilterName = null
-                    searchFavoritesOnly = true
-                  }
-                  else -> {
-                    val cat = CalendarCategory.entries.getOrNull(idx - 2)
-                    if (cat != null) {
-                      searchFavoritesOnly = false
-                      searchCategoryFilterName = cat.name
-                    }
-                  }
-                }
-              },
-            )
             .testTag("calendar_search_overlay"),
         ) {
           Column(modifier = Modifier.fillMaxSize()) {
@@ -992,9 +1273,10 @@ fun CalendarScreen(
               barTestTag = "calendar_search_filter_bar",
             ) {
               ToolboxPillNavigationItem(
-                selected = searchCategoryFilter == null && !searchFavoritesOnly,
+                selected = searchCategoryFilter == null && searchDeviceCalendarIdFilter == null && !searchFavoritesOnly,
                 onClick = {
                   searchCategoryFilterName = null
+                  searchDeviceCalendarIdFilter = null
                   searchFavoritesOnly = false
                 },
                 label = "All (${allEvents.size})",
@@ -1007,10 +1289,32 @@ fun CalendarScreen(
                 leadingIcon = Icons.Default.Star,
                 testTag = "calendar_search_filter_starred",
               )
+              enabledDeviceCalendarsForSearch.forEach { cal ->
+                ToolboxPillNavigationItem(
+                  selected = searchDeviceCalendarIdFilter == cal.id,
+                  onClick = {
+                    searchFavoritesOnly = false
+                    searchCategoryFilterName = null
+                    searchDeviceCalendarIdFilter = if (searchDeviceCalendarIdFilter == cal.id) null else cal.id
+                  },
+                  label = cal.displayName,
+                  leadingIconContent = {
+                    Box(
+                      modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(cal.accentColor),
+                    )
+                  },
+                  testTag = "calendar_search_filter_device_${cal.id}",
+                )
+              }
               CalendarCategory.entries.forEach { cat ->
                 ToolboxPillNavigationItem(
                   selected = searchCategoryFilter == cat,
                   onClick = {
+                    searchFavoritesOnly = false
+                    searchDeviceCalendarIdFilter = null
                     searchCategoryFilterName = if (searchCategoryFilter == cat) null else cat.name
                   },
                   label = cat.displayName,
@@ -1027,72 +1331,133 @@ fun CalendarScreen(
               }
             }
 
-            LazyColumn(
-              modifier = Modifier.fillMaxSize(),
-              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              if (matchingEvents.isEmpty()) {
-                item {
-                  Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(
-                      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                    ),
-                    modifier = Modifier
-                      .fillMaxWidth()
-                      .padding(top = 12.dp)
-                      .testTag("calendar_search_empty_card"),
-                  ) {
-                    Column(
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                      horizontalAlignment = Alignment.CenterHorizontally,
-                      verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.Event,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp),
-                      )
-                      Text(
-                        text = "No matching calendar events",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                      )
-                      Text(
-                        text = "Try searching by event title, holiday name, category, color swatch, or month.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                      )
+            ToolboxPillHorizontalPager(
+              items = searchFilterPillIndices,
+              selectedItem = activeSearchFilterPillIndex,
+              key = { _, idx -> idx },
+              onSelectItem = { idx ->
+                val devCount = enabledDeviceCalendarsForSearch.size
+                when {
+                  idx == 0 -> {
+                    searchCategoryFilterName = null
+                    searchDeviceCalendarIdFilter = null
+                    searchFavoritesOnly = false
+                  }
+                  idx == 1 -> {
+                    searchCategoryFilterName = null
+                    searchDeviceCalendarIdFilter = null
+                    searchFavoritesOnly = true
+                  }
+                  idx < 2 + devCount -> {
+                    val devCal = enabledDeviceCalendarsForSearch.getOrNull(idx - 2)
+                    if (devCal != null) {
+                      searchFavoritesOnly = false
+                      searchCategoryFilterName = null
+                      searchDeviceCalendarIdFilter = devCal.id
+                    }
+                  }
+                  else -> {
+                    val cat = CalendarCategory.entries.getOrNull(idx - 2 - devCount)
+                    if (cat != null) {
+                      searchFavoritesOnly = false
+                      searchDeviceCalendarIdFilter = null
+                      searchCategoryFilterName = cat.name
                     }
                   }
                 }
-              } else {
-                items(matchingEvents, key = { it.id }) { event ->
-                  CalendarEventListCard(
-                    event = event,
-                    occurrenceDay = event.startDay,
-                    isDarkTheme = isDarkTheme,
-                    isSelected = false,
-                    isSelectionMode = false,
-                    showDateInSubtitle = true,
-                    onClick = {
-                      setSelectedDay(event.startDay)
-                      closeSearch()
-                      inspectingEvents = listOf(event)
-                    },
-                    onLongClick = {
-                      setSelectedDay(event.startDay)
-                      closeSearch()
-                      inspectingEvents = listOf(event)
-                    },
-                    onToggleFavorite = { toggleEventFavorite(event) },
-                  )
+              },
+              modifier = Modifier.fillMaxSize(),
+            ) { pageFilterIdx ->
+              val isCurrentFilterPage = pageFilterIdx == activeSearchFilterPillIndex
+              val pageMatchingEvents = remember(allEvents, searchQuery, pageFilterIdx, enabledDeviceCalendarsForSearch) {
+                val devCount = enabledDeviceCalendarsForSearch.size
+                val pageFavoritesOnly = pageFilterIdx == 1
+                val pageDeviceCalId = if (pageFilterIdx >= 2 && pageFilterIdx < 2 + devCount) {
+                  enabledDeviceCalendarsForSearch.getOrNull(pageFilterIdx - 2)?.id
+                } else {
+                  null
+                }
+                val pageCat = if (pageFilterIdx >= 2 + devCount) {
+                  CalendarCategory.entries.getOrNull(pageFilterIdx - 2 - devCount)
+                } else {
+                  null
+                }
+                CalendarEngine.searchEvents(
+                  events = allEvents,
+                  query = searchQuery,
+                  categoryFilter = pageCat,
+                  favoritesOnly = pageFavoritesOnly,
+                  deviceCalendarIdFilter = pageDeviceCalId,
+                )
+              }
+
+              LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                if (pageMatchingEvents.isEmpty()) {
+                  item {
+                    Card(
+                      shape = RoundedCornerShape(14.dp),
+                      colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                      ),
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
+                        .then(if (isCurrentFilterPage) Modifier.testTag("calendar_search_empty_card") else Modifier),
+                    ) {
+                      Column(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.Event,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.primary,
+                          modifier = Modifier.size(32.dp),
+                        )
+                        Text(
+                          text = "No matching calendar events",
+                          style = MaterialTheme.typography.titleMedium,
+                          fontWeight = FontWeight.Bold,
+                          color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                          text = "Try searching by event title, holiday name, category, color swatch, or month.",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          textAlign = TextAlign.Center,
+                        )
+                      }
+                    }
+                  }
+                } else {
+                  items(pageMatchingEvents, key = { it.id }) { event ->
+                    CalendarEventListCard(
+                      event = event,
+                      occurrenceDay = event.startDay,
+                      isDarkTheme = isDarkTheme,
+                      isSelected = false,
+                      isSelectionMode = false,
+                      showDateInSubtitle = true,
+                      onClick = {
+                        setSelectedDay(event.startDay)
+                        closeSearch()
+                        inspectingEvents = listOf(event)
+                      },
+                      onLongClick = {
+                        setSelectedDay(event.startDay)
+                        closeSearch()
+                        inspectingEvents = listOf(event)
+                      },
+                      onToggleFavorite = { toggleEventFavorite(event) },
+                    )
+                  }
                 }
               }
             }
@@ -1123,35 +1488,137 @@ fun CalendarScreen(
 
   // 4. Dialogs (Section 5.2)
   if (showEventEditorDialog) {
+    val resolvedDefaultTargetDeviceCalendarId = remember(
+      preferredTargetCalendarId,
+      writableDeviceCalendars,
+      activeDeviceCalendarIds,
+      syncDeviceCalendars,
+    ) {
+      CalendarEngine.resolveDefaultTargetDeviceCalendarId(
+        preferredId = preferredTargetCalendarId,
+        writableCalendars = writableDeviceCalendars,
+        enabledDeviceCalendarIds = activeDeviceCalendarIds,
+        syncEnabled = syncDeviceCalendars,
+      )
+    }
+
     CalendarEventEditorDialog(
       editingEvent = editingEvent,
       prefillEvent = prefillEvent,
       defaultDay = selectedDay,
       defaultStartHour = editorInitialHour,
+      writableDeviceCalendars = writableDeviceCalendars,
+      defaultTargetDeviceCalendarId = resolvedDefaultTargetDeviceCalendarId,
       isDarkTheme = isDarkTheme,
       onDismiss = {
         showEventEditorDialog = false
         editingEvent = null
         prefillEvent = null
       },
-      onSave = { savedEvent ->
+      onSave = { savedEvent, targetDeviceCalendarId ->
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        if (
-          !isInspection &&
-          savedEvent.reminderMinutesBefore >= 0 &&
-          Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-          !CalendarNotificationHelper.hasNotificationPermission(context)
-        ) {
-          try {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-          } catch (_: Throwable) {}
+        val prefToSave = targetDeviceCalendarId ?: TARGET_CALENDAR_LOCAL_ID
+        preferredTargetCalendarId = prefToSave
+        repo.setPreferredTargetCalendarId(prefToSave)
+
+        val targetDeviceCalendar = targetDeviceCalendarId?.let { id ->
+          writableDeviceCalendars.firstOrNull { it.id == id }
         }
-        val updated = if (editingEvent != null) {
-          userEvents.map { if (it.id == savedEvent.id) savedEvent else it }
+
+        if (!isInspection && targetDeviceCalendar != null && DeviceCalendarHelper.hasWritePermission(context)) {
+          val writtenDeviceEventId = if (
+            editingEvent != null &&
+            editingEvent?.isDeviceCalendarEvent == true &&
+            editingEvent?.deviceEventId != null
+          ) {
+            DeviceCalendarHelper.updateDeviceEvent(
+              context = context,
+              existingEventId = editingEvent!!.deviceEventId!!,
+              existingCalendarId = editingEvent!!.deviceCalendarId,
+              updatedEvent = savedEvent,
+              targetCalendar = targetDeviceCalendar,
+            )
+          } else {
+            val newId = DeviceCalendarHelper.insertDeviceEvent(
+              context = context,
+              event = savedEvent,
+              targetCalendar = targetDeviceCalendar,
+            )
+            if (newId != null && editingEvent != null && editingEvent?.isDeviceCalendarEvent == false) {
+              // Moved from Toolbox Local -> Device Calendar
+              CalendarNotificationHelper.cancelEventAlarm(context, editingEvent!!.id)
+              persistEvents(userEvents.filterNot { it.id == editingEvent!!.id })
+            }
+            newId
+          }
+
+          if (writtenDeviceEventId != null) {
+            if (!syncDeviceCalendars) {
+              syncDeviceCalendars = true
+              repo.setSyncDeviceCalendars(true)
+            }
+            val currentStoredIds = storedEnabledDeviceCalendarIds
+            if (currentStoredIds != null && targetDeviceCalendar.id !in currentStoredIds) {
+              val nextIds = currentStoredIds + targetDeviceCalendar.id
+              storedEnabledDeviceCalendarIds = nextIds
+              repo.setEnabledDeviceCalendarIds(nextIds)
+            }
+            deviceCalendarRefreshTick++
+            CalendarWidgets.updateAllWidgets(context)
+          } else {
+            Toast.makeText(
+              context,
+              "Unable to write to ${targetDeviceCalendar.displayName}; saved locally instead",
+              Toast.LENGTH_SHORT,
+            ).show()
+            val localFallback = savedEvent.copy(
+              id = UUID.randomUUID().toString(),
+              deviceCalendarId = null,
+              deviceEventId = null,
+              deviceCalendarName = null,
+              deviceAccountName = null,
+              deviceCalendarColorArgb = null,
+              isPreExpandedInstance = false,
+            )
+            persistEvents(listOf(localFallback) + userEvents)
+          }
         } else {
-          listOf(savedEvent) + userEvents
+          if (
+            !isInspection &&
+            savedEvent.reminderMinutesBefore >= 0 &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !CalendarNotificationHelper.hasNotificationPermission(context)
+          ) {
+            try {
+              notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } catch (_: Throwable) {}
+          }
+
+          val cleanLocal = savedEvent.copy(
+            deviceCalendarId = null,
+            deviceEventId = null,
+            deviceCalendarName = null,
+            deviceAccountName = null,
+            deviceCalendarColorArgb = null,
+            isPreExpandedInstance = false,
+          )
+          if (editingEvent != null && editingEvent?.isDeviceCalendarEvent == true && editingEvent?.deviceEventId != null) {
+            // Moved from Device Calendar -> Toolbox Local
+            if (!isInspection) {
+              DeviceCalendarHelper.deleteDeviceEvent(context, editingEvent!!.deviceEventId!!)
+              deviceCalendarRefreshTick++
+            }
+            val movedLocal = cleanLocal.copy(id = UUID.randomUUID().toString())
+            persistEvents(listOf(movedLocal) + userEvents)
+          } else {
+            val updated = if (editingEvent != null) {
+              userEvents.map { if (it.id == cleanLocal.id) cleanLocal else it }
+            } else {
+              listOf(cleanLocal) + userEvents
+            }
+            persistEvents(updated)
+          }
         }
-        persistEvents(updated)
         setSelectedDay(savedEvent.startDay)
         showEventEditorDialog = false
         editingEvent = null
@@ -1220,9 +1687,26 @@ fun CalendarScreen(
       onDismiss = { pendingDeleteEvents = emptyList() },
       onConfirmDelete = {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        val idsToRemove = pendingDeleteEvents.map { it.id }.toSet()
-        idsToRemove.forEach { CalendarNotificationHelper.cancelEventAlarm(context, it) }
-        persistEvents(userEvents.filterNot { it.id in idsToRemove })
+        val deviceEventIdsToDelete = pendingDeleteEvents
+          .filter { it.isDeviceCalendarEvent }
+          .mapNotNull { it.deviceEventId }
+          .distinct()
+        val localIdsToRemove = pendingDeleteEvents
+          .filterNot { it.isDeviceCalendarEvent }
+          .map { it.id }
+          .toSet()
+
+        if (!isInspection && deviceEventIdsToDelete.isNotEmpty()) {
+          deviceEventIdsToDelete.forEach { devEvId ->
+            DeviceCalendarHelper.deleteDeviceEvent(context, devEvId)
+          }
+          deviceCalendarRefreshTick++
+          CalendarWidgets.updateAllWidgets(context)
+        }
+        if (localIdsToRemove.isNotEmpty()) {
+          localIdsToRemove.forEach { CalendarNotificationHelper.cancelEventAlarm(context, it) }
+          persistEvents(userEvents.filterNot { it.id in localIdsToRemove })
+        }
         pendingDeleteEvents = emptyList()
         exitSelectionMode()
       },
@@ -1234,8 +1718,16 @@ fun CalendarScreen(
       enabledCategories = enabledCategories,
       showHolidays = showHolidays,
       showTodos = showTodos,
+      hasReadCalendarPermission = hasReadCalendarPermission,
+      hasWriteCalendarPermission = hasWriteCalendarPermission,
+      syncDeviceCalendars = syncDeviceCalendars,
+      deviceCalendars = deviceCalendars,
+      enabledDeviceCalendarIds = activeDeviceCalendarIds,
+      onRequestDeviceCalendarPermission = {
+        requestDeviceCalendarAccess(openSettingsIfAlreadyDenied = true)
+      },
       onDismiss = { showFilterCalendarsDialog = false },
-      onApply = { updatedCategories, updatedHolidays, updatedTodos ->
+      onApply = { updatedCategories, updatedHolidays, updatedTodos, updatedSyncDevice, updatedDeviceIds ->
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         enabledCategories = updatedCategories
         showHolidays = updatedHolidays
@@ -1243,6 +1735,15 @@ fun CalendarScreen(
         repo.setEnabledCategories(updatedCategories)
         repo.setShowHolidays(updatedHolidays)
         repo.setShowTodos(updatedTodos)
+
+        if (hasReadCalendarPermission) {
+          syncDeviceCalendars = updatedSyncDevice
+          repo.setSyncDeviceCalendars(updatedSyncDevice)
+          if (deviceCalendars.isNotEmpty()) {
+            storedEnabledDeviceCalendarIds = updatedDeviceIds
+            repo.setEnabledDeviceCalendarIds(updatedDeviceIds)
+          }
+        }
         if (!isInspection) {
           CalendarWidgets.updateAllWidgets(context)
         }
@@ -1266,6 +1767,7 @@ private fun GoogleCalendarMonthView(
   today: CalendarDay,
   allEvents: List<CalendarEvent>,
   enabledCategories: Set<CalendarCategory>,
+  enabledDeviceCalendarIds: Set<Long>? = null,
   isDarkTheme: Boolean,
   isSelectionMode: Boolean,
   selectedEventIds: Set<String>,
@@ -1278,8 +1780,8 @@ private fun GoogleCalendarMonthView(
   val gridDays = remember(year, month) {
     CalendarEngine.buildMonthGridDays(year, month)
   }
-  val occurrencesByDay = remember(allEvents, gridDays, enabledCategories) {
-    CalendarEngine.occurrencesForDays(allEvents, gridDays, enabledCategories)
+  val occurrencesByDay = remember(allEvents, gridDays, enabledCategories, enabledDeviceCalendarIds) {
+    CalendarEngine.occurrencesForDays(allEvents, gridDays, enabledCategories, enabledDeviceCalendarIds)
   }
   val selectedOccurrences = occurrencesByDay[selectedDay].orEmpty()
   val weekdayHeaders = remember { listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat") }
@@ -1588,13 +2090,14 @@ private fun GoogleCalendarTimelineView(
   nowMillis: Long,
   allEvents: List<CalendarEvent>,
   enabledCategories: Set<CalendarCategory>,
+  enabledDeviceCalendarIds: Set<Long>? = null,
   isDarkTheme: Boolean,
   onSelectDay: (CalendarDay) -> Unit,
   onEmptySlotClick: (CalendarDay, Int) -> Unit,
   onEventClick: (CalendarEvent) -> Unit,
 ) {
-  val occurrencesByDay = remember(allEvents, days, enabledCategories) {
-    CalendarEngine.occurrencesForDays(allEvents, days, enabledCategories)
+  val occurrencesByDay = remember(allEvents, days, enabledCategories, enabledDeviceCalendarIds) {
+    CalendarEngine.occurrencesForDays(allEvents, days, enabledCategories, enabledDeviceCalendarIds)
   }
   val hourHeightDp = 56.dp
   val timeGutterWidth = 54.dp
@@ -1902,6 +2405,7 @@ private fun GoogleCalendarScheduleAgendaView(
   nowMillis: Long,
   allEvents: List<CalendarEvent>,
   enabledCategories: Set<CalendarCategory>,
+  enabledDeviceCalendarIds: Set<Long>? = null,
   isDarkTheme: Boolean,
   isSelectionMode: Boolean,
   selectedEventIds: Set<String>,
@@ -1910,13 +2414,14 @@ private fun GoogleCalendarScheduleAgendaView(
   onEventLongClick: (CalendarEvent) -> Unit,
   onToggleFavorite: (CalendarEvent) -> Unit,
 ) {
-  val occurrencesByDay = remember(allEvents, anchorDay, today, nowMillis, enabledCategories) {
+  val occurrencesByDay = remember(allEvents, anchorDay, today, nowMillis, enabledCategories, enabledDeviceCalendarIds) {
     CalendarEngine.buildUpcomingScheduleDays(
       events = allEvents,
       anchorDay = anchorDay,
       today = today,
       nowMillis = nowMillis,
       enabledCategories = enabledCategories,
+      enabledDeviceCalendarIds = enabledDeviceCalendarIds,
     )
   }
   val activeDaysWithEvents = remember(occurrencesByDay) {
@@ -2064,7 +2569,7 @@ private fun CalendarEventListCard(
         add("${occurrenceDay.monthShortName} ${occurrenceDay.dayOfMonth}, ${occurrenceDay.year}")
       }
       add(CalendarEngine.formatTimeRange(event.startMillis, event.endMillis, event.isAllDay))
-      add(event.category.displayName)
+      add(event.calendarSourceLabel)
       if (event.recurrence != CalendarRecurrence.NONE) {
         add(event.recurrence.shortLabel)
       }
@@ -2194,12 +2699,30 @@ private fun CalendarEventEditorDialog(
   prefillEvent: CalendarEvent?,
   defaultDay: CalendarDay,
   defaultStartHour: Int,
+  writableDeviceCalendars: List<DeviceCalendarInfo> = emptyList(),
+  defaultTargetDeviceCalendarId: Long? = null,
   isDarkTheme: Boolean,
   onDismiss: () -> Unit,
-  onSave: (CalendarEvent) -> Unit,
+  onSave: (CalendarEvent, Long?) -> Unit,
 ) {
   val source = editingEvent ?: prefillEvent
   val initialTitle = source?.title.orEmpty()
+  val initialTargetCalendarId = remember(editingEvent, writableDeviceCalendars, defaultTargetDeviceCalendarId) {
+    if (editingEvent != null) {
+      val existingCalId = editingEvent.deviceCalendarId
+      if (existingCalId != null && writableDeviceCalendars.any { it.id == existingCalId }) {
+        existingCalId
+      } else {
+        null
+      }
+    } else {
+      defaultTargetDeviceCalendarId?.takeIf { id -> writableDeviceCalendars.any { it.id == id } }
+    }
+  }
+  var selectedTargetDeviceCalendarId by remember { mutableStateOf(initialTargetCalendarId) }
+  val activeTargetDeviceCalendar = remember(selectedTargetDeviceCalendarId, writableDeviceCalendars) {
+    selectedTargetDeviceCalendarId?.let { id -> writableDeviceCalendars.firstOrNull { it.id == id } }
+  }
 
   var titleField by remember {
     mutableStateOf(
@@ -2219,7 +2742,11 @@ private fun CalendarEventEditorDialog(
     )
   }
   var selectedColor by remember {
-    mutableStateOf(source?.color ?: selectedCategory.defaultColorSwatch)
+    mutableStateOf(
+      source?.color
+        ?: activeTargetDeviceCalendar?.closestSwatch
+        ?: selectedCategory.defaultColorSwatch
+    )
   }
   var selectedRecurrence by remember {
     mutableStateOf(source?.recurrence ?: CalendarRecurrence.NONE)
@@ -2279,13 +2806,15 @@ private fun CalendarEventEditorDialog(
     editingEvent.location == trimmedLocation &&
     editingEvent.description == trimmedDescription &&
     editingEvent.isAllDay == isAllDay &&
-    editingEvent.category == selectedCategory &&
+    editingEvent.deviceCalendarId == selectedTargetDeviceCalendarId &&
+    (selectedTargetDeviceCalendarId != null || editingEvent.category == selectedCategory) &&
     editingEvent.color == selectedColor &&
     editingEvent.recurrence == selectedRecurrence &&
     editingEvent.reminderMinutesBefore == selectedReminder.minutesBefore &&
     editingEvent.startMillis == startMillis &&
     editingEvent.endMillis == maxOf(startMillis, endMillis)
   val canConfirm = trimmedTitle.isNotEmpty() && isTimeRangeValid && !isUnchanged
+  val destinationSubtitle = activeTargetDeviceCalendar?.displayName ?: selectedCategory.displayName
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -2320,7 +2849,7 @@ private fun CalendarEventEditorDialog(
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "${eventDay.monthShortName} ${eventDay.dayOfMonth}, ${eventDay.year} • ${selectedCategory.displayName}",
+            text = "${eventDay.monthShortName} ${eventDay.dayOfMonth}, ${eventDay.year} • $destinationSubtitle",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -2538,34 +3067,82 @@ private fun CalendarEventEditorDialog(
           }
         }
 
-        // Category Pills
-        Text(
-          text = "Calendar Category",
-          style = MaterialTheme.typography.labelMedium,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          val editableCategories = remember {
-            CalendarCategory.entries.filter {
-              it != CalendarCategory.HOLIDAYS && it != CalendarCategory.TASKS
+        // Save Destination Calendar Picker (Toolbox Local vs Writable Device Calendars)
+        if (writableDeviceCalendars.isNotEmpty()) {
+          Text(
+            text = "Save to Calendar",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            ToolboxPillNavigationItem(
+              selected = selectedTargetDeviceCalendarId == null,
+              onClick = {
+                selectedTargetDeviceCalendarId = null
+                selectedColor = selectedCategory.defaultColorSwatch
+              },
+              label = "Toolbox (Local)",
+              leadingIcon = Icons.Default.CalendarMonth,
+              testTag = "calendar_editor_target_local",
+            )
+            writableDeviceCalendars.forEach { cal ->
+              ToolboxPillNavigationItem(
+                selected = selectedTargetDeviceCalendarId == cal.id,
+                onClick = {
+                  selectedTargetDeviceCalendarId = cal.id
+                  selectedColor = cal.closestSwatch
+                },
+                label = cal.displayName,
+                leadingIconContent = {
+                  Box(
+                    modifier = Modifier
+                      .size(10.dp)
+                      .clip(CircleShape)
+                      .background(cal.accentColor),
+                  )
+                },
+                testTag = "calendar_editor_target_device_${cal.id}",
+              )
             }
           }
-          editableCategories.forEach { cat ->
-            ToolboxPillNavigationItem(
-              selected = selectedCategory == cat,
-              onClick = {
-                selectedCategory = cat
-                selectedColor = cat.defaultColorSwatch
-              },
-              label = cat.displayName,
-              testTag = "calendar_editor_category_${cat.name.lowercase()}",
-            )
+        }
+
+        // Category Pills (shown when saving to Toolbox Local)
+        if (selectedTargetDeviceCalendarId == null) {
+          Text(
+            text = "Calendar Category",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            val editableCategories = remember {
+              CalendarCategory.entries.filter {
+                it != CalendarCategory.HOLIDAYS && it != CalendarCategory.TASKS
+              }
+            }
+            editableCategories.forEach { cat ->
+              ToolboxPillNavigationItem(
+                selected = selectedCategory == cat,
+                onClick = {
+                  selectedCategory = cat
+                  selectedColor = cat.defaultColorSwatch
+                },
+                label = cat.displayName,
+                testTag = "calendar_editor_category_${cat.name.lowercase()}",
+              )
+            }
           }
         }
 
@@ -2700,6 +3277,11 @@ private fun CalendarEventEditorDialog(
       Button(
         onClick = {
           if (canConfirm) {
+            val resolvedCategory = if (activeTargetDeviceCalendar != null) {
+              CalendarEngine.inferCategoryForDeviceCalendar(activeTargetDeviceCalendar.displayName, trimmedTitle)
+            } else {
+              selectedCategory
+            }
             val result = CalendarEvent(
               id = editingEvent?.id ?: UUID.randomUUID().toString(),
               title = trimmedTitle,
@@ -2708,13 +3290,18 @@ private fun CalendarEventEditorDialog(
               startMillis = startMillis,
               endMillis = maxOf(startMillis, endMillis),
               isAllDay = isAllDay,
-              category = selectedCategory,
+              category = resolvedCategory,
               color = selectedColor,
               recurrence = selectedRecurrence,
               reminderMinutesBefore = selectedReminder.minutesBefore,
               isFavorite = editingEvent?.isFavorite ?: false,
+              deviceCalendarId = activeTargetDeviceCalendar?.id,
+              deviceEventId = editingEvent?.deviceEventId?.takeIf { activeTargetDeviceCalendar != null },
+              deviceCalendarName = activeTargetDeviceCalendar?.displayName,
+              deviceAccountName = activeTargetDeviceCalendar?.accountName,
+              deviceCalendarColorArgb = activeTargetDeviceCalendar?.colorArgb,
             )
-            onSave(result)
+            onSave(result, selectedTargetDeviceCalendarId)
           }
         },
         enabled = canConfirm,
@@ -2982,7 +3569,7 @@ private fun CalendarEventInspectorDialog(
           )
           Text(
             text = if (single != null) {
-              "${single.category.displayName} • ${CalendarEngine.formatDayHeader(single.startDay)}"
+              "${single.calendarSourceLabel} • ${CalendarEngine.formatDayHeader(single.startDay)}"
             } else {
               "Selected events summary & actions"
             },
@@ -3035,6 +3622,30 @@ private fun CalendarEventInspectorDialog(
                   fontWeight = FontWeight.SemiBold,
                   color = MaterialTheme.colorScheme.onSurface,
                 )
+              }
+
+              if (single.isDeviceCalendarEvent) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.CalendarMonth,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                  )
+                  val accountSuffix = single.deviceAccountName
+                    ?.takeIf { it.isNotBlank() && !it.equals(single.calendarSourceLabel, ignoreCase = true) }
+                    ?.let { " ($it)" }
+                    .orEmpty()
+                  val readOnlySuffix = if (!single.isDeviceEventWritable) " • Read-only" else ""
+                  Text(
+                    text = "${single.calendarSourceLabel}$accountSuffix$readOnlySuffix",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
               }
 
               if (single.recurrence != CalendarRecurrence.NONE) {
@@ -3435,22 +4046,40 @@ private fun CalendarDeleteConfirmDialog(
 }
 
 /**
- * Filter Calendars & Layers Dialog (Personal, Work, Birthdays, Health, Travel, Holidays, To-Do Tasks).
+ * Filter Calendars & Layers Dialog (Device Calendars + Toolbox Personal, Work, Birthdays, Health, Travel, Holidays, To-Do Tasks).
  */
 @Composable
 private fun CalendarFilterCategoriesDialog(
   enabledCategories: Set<CalendarCategory>,
   showHolidays: Boolean,
   showTodos: Boolean,
+  hasReadCalendarPermission: Boolean = false,
+  hasWriteCalendarPermission: Boolean = false,
+  syncDeviceCalendars: Boolean = true,
+  deviceCalendars: List<DeviceCalendarInfo> = emptyList(),
+  enabledDeviceCalendarIds: Set<Long> = emptySet(),
+  onRequestDeviceCalendarPermission: () -> Unit = {},
   onDismiss: () -> Unit,
-  onApply: (Set<CalendarCategory>, Boolean, Boolean) -> Unit,
+  onApply: (Set<CalendarCategory>, Boolean, Boolean, Boolean, Set<Long>) -> Unit,
 ) {
   var selected by remember { mutableStateOf(enabledCategories) }
   var holidaysChecked by remember { mutableStateOf(showHolidays) }
   var todosChecked by remember { mutableStateOf(showTodos) }
+  var syncDeviceChecked by remember(syncDeviceCalendars) { mutableStateOf(syncDeviceCalendars) }
+  var selectedDeviceIds by remember(enabledDeviceCalendarIds) { mutableStateOf(enabledDeviceCalendarIds) }
+
   val isUnchanged = selected == enabledCategories &&
     holidaysChecked == showHolidays &&
-    todosChecked == showTodos
+    todosChecked == showTodos &&
+    (!hasReadCalendarPermission || (syncDeviceChecked == syncDeviceCalendars && selectedDeviceIds == enabledDeviceCalendarIds))
+
+  val activeDeviceCount = if (hasReadCalendarPermission && syncDeviceChecked) {
+    deviceCalendars.count { it.id in selectedDeviceIds }
+  } else {
+    0
+  }
+  val totalVisibleSources = selected.size + activeDeviceCount
+  val totalAvailableSources = CalendarCategory.entries.size + if (hasReadCalendarPermission) deviceCalendars.size else 0
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -3485,7 +4114,7 @@ private fun CalendarFilterCategoriesDialog(
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Toggle calendar categories, holidays & tasks",
+            text = "Filter device calendars, categories, holidays & tasks",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -3496,6 +4125,7 @@ private fun CalendarFilterCategoriesDialog(
       Column(
         modifier = Modifier
           .fillMaxWidth()
+          .heightIn(max = 440.dp)
           .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
@@ -3530,16 +4160,22 @@ private fun CalendarFilterCategoriesDialog(
             }
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "${selected.size} of ${CalendarCategory.entries.size} calendars active",
+                text = "$totalVisibleSources of $totalAvailableSources calendars active",
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
               )
+              val summaryNames = buildList {
+                if (hasReadCalendarPermission && syncDeviceChecked) {
+                  deviceCalendars.filter { it.id in selectedDeviceIds }.forEach { add(it.displayName) }
+                }
+                selected.forEach { add(it.displayName) }
+              }
               Text(
-                text = if (selected.isEmpty()) {
+                text = if (summaryNames.isEmpty()) {
                   "No calendar layers visible"
                 } else {
-                  selected.joinToString(" • ") { it.displayName }
+                  summaryNames.joinToString(" • ")
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3549,6 +4185,218 @@ private fun CalendarFilterCategoriesDialog(
             }
           }
         }
+
+        // 1. Device Calendars Section
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = "Device Calendars",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          if (hasReadCalendarPermission && syncDeviceChecked && deviceCalendars.size > 1) {
+            val allDeviceSelected = deviceCalendars.all { it.id in selectedDeviceIds }
+            TextButton(
+              onClick = {
+                selectedDeviceIds = if (allDeviceSelected) {
+                  emptySet()
+                } else {
+                  deviceCalendars.map { it.id }.toSet()
+                }
+              },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            ) {
+              Text(
+                text = if (allDeviceSelected) "Deselect All" else "Select All",
+                style = MaterialTheme.typography.labelSmall,
+              )
+            }
+          }
+        }
+
+        if (!hasReadCalendarPermission) {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            ),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(34.dp)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Sync,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Device Calendar Access",
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = "Grant access to view, filter, create & edit events on synced Android calendars",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+              Button(
+                onClick = onRequestDeviceCalendarPermission,
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.testTag("calendar_grant_device_permission_button"),
+              ) {
+                Text("Grant", style = MaterialTheme.typography.labelMedium)
+              }
+            }
+          }
+        } else {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            ),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Show Device Calendars",
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = if (!hasWriteCalendarPermission) {
+                    "Read-only access • Grant write permission to save events"
+                  } else if (deviceCalendars.isEmpty()) {
+                    "No synced calendars found on this device"
+                  } else {
+                    "${deviceCalendars.size} ${if (deviceCalendars.size == 1) "calendar" else "calendars"} available"
+                  },
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+              Switch(
+                checked = syncDeviceChecked,
+                onCheckedChange = { syncDeviceChecked = it },
+                modifier = Modifier.testTag("calendar_sync_device_switch"),
+              )
+            }
+          }
+
+          if (!hasWriteCalendarPermission) {
+            TextButton(
+              onClick = onRequestDeviceCalendarPermission,
+              shape = CircleShape,
+            ) {
+              Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("Grant Write Access")
+            }
+          }
+
+          if (syncDeviceChecked && deviceCalendars.isNotEmpty()) {
+            deviceCalendars.forEach { cal ->
+              val isCalChecked = cal.id in selectedDeviceIds
+              val subParts = buildList {
+                add(cal.accountSubtitle)
+                if (cal.isPrimary) add("Primary")
+                if (!cal.isWritable) add("Read-only")
+              }.joinToString(" • ")
+
+              Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                ),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .clip(RoundedCornerShape(14.dp))
+                  .clickable {
+                    selectedDeviceIds = if (isCalChecked) selectedDeviceIds - cal.id else selectedDeviceIds + cal.id
+                  }
+                  .testTag("calendar_filter_device_${cal.id}"),
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(14.dp)
+                      .clip(CircleShape)
+                      .background(cal.accentColor),
+                  )
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                      text = cal.displayName,
+                      style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onSurface,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                      text = subParts,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
+                  }
+                  Checkbox(
+                    checked = isCalChecked,
+                    onCheckedChange = { checked ->
+                      selectedDeviceIds = if (checked) selectedDeviceIds + cal.id else selectedDeviceIds - cal.id
+                    },
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+        // 2. Toolbox Layers Section
+        Text(
+          text = "Toolbox Layers",
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         CalendarCategory.entries.forEach { cat ->
           val isChecked = cat in selected
@@ -3601,7 +4449,7 @@ private fun CalendarFilterCategoriesDialog(
     },
     confirmButton = {
       Button(
-        onClick = { onApply(selected, holidaysChecked, todosChecked) },
+        onClick = { onApply(selected, holidaysChecked, todosChecked, syncDeviceChecked, selectedDeviceIds) },
         enabled = !isUnchanged,
         shape = CircleShape,
       ) {

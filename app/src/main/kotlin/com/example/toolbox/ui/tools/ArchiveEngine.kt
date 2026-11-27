@@ -9,17 +9,25 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.Calendar
 import java.util.Locale
 import java.util.zip.CRC32
+import java.util.zip.DataFormatException
 import java.util.zip.Deflater
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
+import java.util.zip.Inflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import javax.crypto.Cipher
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Supported archive formats for viewing, extracting, and creating archives.
@@ -30,6 +38,7 @@ enum class ArchiveFormat(
   val mimeType: String,
   val aliases: Set<String>,
   val supportsMultiEntryWrite: Boolean,
+  val supportsPasswordEncryption: Boolean = false,
 ) {
   ZIP(
     displayName = "ZIP",
@@ -37,6 +46,7 @@ enum class ArchiveFormat(
     mimeType = "application/zip",
     aliases = setOf("zip", "jar", "apk", "cbz"),
     supportsMultiEntryWrite = true,
+    supportsPasswordEncryption = true,
   ),
   TAR(
     displayName = "TAR",
@@ -60,6 +70,75 @@ enum class ArchiveFormat(
     supportsMultiEntryWrite = false,
   ),
 }
+
+/**
+ * Supported password encryption methods for `.zip` archives.
+ */
+enum class ArchiveEncryptionMethod(
+  val displayName: String,
+  val shortLabel: String,
+  val description: String,
+  val aesStrengthByte: Int = 0,
+  val saltLength: Int = 0,
+  val keyLength: Int = 0,
+) {
+  NONE(
+    displayName = "None",
+    shortLabel = "None",
+    description = "Unencrypted standard archive",
+  ),
+  AES_256(
+    displayName = "AES-256 (WinZip AE-2)",
+    shortLabel = "AES-256",
+    description = "Strong 256-bit AES encryption with HMAC-SHA1 verification",
+    aesStrengthByte = 3,
+    saltLength = 16,
+    keyLength = 32,
+  ),
+  AES_192(
+    displayName = "AES-192 (WinZip AE-2)",
+    shortLabel = "AES-192",
+    description = "192-bit AES encryption with HMAC-SHA1 verification",
+    aesStrengthByte = 2,
+    saltLength = 12,
+    keyLength = 24,
+  ),
+  AES_128(
+    displayName = "AES-128 (WinZip AE-2)",
+    shortLabel = "AES-128",
+    description = "128-bit AES encryption with HMAC-SHA1 verification",
+    aesStrengthByte = 1,
+    saltLength = 8,
+    keyLength = 16,
+  ),
+  ZIP_CRYPTO(
+    displayName = "ZipCrypto (Legacy)",
+    shortLabel = "ZipCrypto",
+    description = "Traditional PKWARE password protection for legacy extractors",
+  );
+
+  val isAes: Boolean
+    get() = aesStrengthByte in 1..3
+
+  companion object {
+    val creatableMethods: List<ArchiveEncryptionMethod> = listOf(AES_256, ZIP_CRYPTO)
+
+    fun fromAesStrength(strength: Int): ArchiveEncryptionMethod = when (strength) {
+      1 -> AES_128
+      2 -> AES_192
+      3 -> AES_256
+      else -> AES_256
+    }
+  }
+}
+
+/**
+ * Thrown when an encrypted archive entry is accessed without a password or with an incorrect password.
+ */
+class InvalidArchivePasswordException(
+  message: String = "Incorrect password",
+  val isMissingPassword: Boolean = false,
+) : Exception(message)
 
 /**
  * Compression level options when creating or modifying ZIP archives.
@@ -90,6 +169,8 @@ data class ArchiveEntryItem(
   val extension: String = "",
   val mimeType: String = "application/octet-stream",
   val childCount: Int? = null,
+  val isEncrypted: Boolean = false,
+  val encryptionMethod: ArchiveEncryptionMethod = ArchiveEncryptionMethod.NONE,
 ) {
   val compressionRatioPercent: Int
     get() = if (sizeBytes > 0L && compressedSizeBytes in 1..sizeBytes) {
@@ -119,6 +200,8 @@ data class ArchiveInfo(
   val totalUncompressedBytes: Long,
   val totalCompressedBytes: Long,
   val archiveFileSizeBytes: Long,
+  val isEncrypted: Boolean = false,
+  val encryptionMethod: ArchiveEncryptionMethod = ArchiveEncryptionMethod.NONE,
 ) {
   val overallCompressionPercent: Int
     get() {
@@ -153,6 +236,8 @@ data class ArchiveOperationResult(
   val extractedFilesCount: Int = 0,
   val totalBytesProcessed: Long = 0L,
   val message: String,
+  val passwordRequired: Boolean = false,
+  val invalidPassword: Boolean = false,
 )
 
 /**
@@ -283,6 +368,7 @@ object ArchiveEngine {
       val totalUncompressed = files.sumOf { it.sizeBytes.coerceAtLeast(0L) }
       val totalCompressed = files.sumOf { it.compressedSizeBytes.coerceAtLeast(0L) }
         .takeIf { it > 0L } ?: archiveFile.length()
+      val firstEncryptedFile = files.firstOrNull { it.isEncrypted }
 
       Result.success(
         ArchiveInfo(
@@ -294,6 +380,8 @@ object ArchiveEngine {
           totalUncompressedBytes = totalUncompressed,
           totalCompressedBytes = totalCompressed,
           archiveFileSizeBytes = archiveFile.length(),
+          isEncrypted = firstEncryptedFile != null,
+          encryptionMethod = firstEncryptedFile?.encryptionMethod ?: ArchiveEncryptionMethod.NONE,
         )
       )
     } catch (e: Exception) {
@@ -527,32 +615,94 @@ object ArchiveEngine {
   }
 
   /**
-   * Reads the raw bytes of a single file entry from [archiveFile], up to [maxBytes].
+   * Verifies whether [password] can unlock the encrypted entries in [archiveFile].
+   * Returns `Result.success(true)` when valid (or when the archive is not encrypted),
+   * `Result.success(false)` when [password] is incorrect, or `Result.failure` on I/O errors.
    */
-  fun readEntryBytes(
+  fun verifyArchivePassword(
+    archiveFile: File,
+    password: String,
+  ): Result<Boolean> {
+    if (!archiveFile.exists() || !archiveFile.isFile) {
+      return Result.failure(IllegalArgumentException("Archive file does not exist"))
+    }
+    val format = detectFormat(archiveFile)
+      ?: return Result.failure(IllegalArgumentException("Unsupported archive format"))
+    if (format != ArchiveFormat.ZIP) {
+      return Result.success(true)
+    }
+
+    return try {
+      val cdEntries = parseZipCentralDirectory(archiveFile)
+      val encryptedEntry = cdEntries.firstOrNull { !it.isDirectory && it.isEncrypted }
+        ?: return Result.success(true)
+      if (password.isEmpty()) {
+        return Result.success(false)
+      }
+      RandomAccessFile(archiveFile, "r").use { raf ->
+        readAndDecodeZipEntryBytes(
+          raf = raf,
+          entry = encryptedEntry,
+          maxBytes = Int.MAX_VALUE,
+          password = password,
+        )
+      }
+      Result.success(true)
+    } catch (_: InvalidArchivePasswordException) {
+      Result.success(false)
+    } catch (e: Exception) {
+      Result.failure(e)
+    }
+  }
+
+  /**
+   * Reads the raw bytes of a single file entry from [archiveFile], up to [maxBytes],
+   * returning a [Result] that distinguishes [InvalidArchivePasswordException] from other errors.
+   */
+  fun readEntryBytesResult(
     archiveFile: File,
     archivePath: String,
     maxBytes: Int = 10 * 1024 * 1024,
-  ): ByteArray? {
-    if (!archiveFile.exists() || !archiveFile.isFile) return null
+    password: String? = null,
+  ): Result<ByteArray> {
+    if (!archiveFile.exists() || !archiveFile.isFile) {
+      return Result.failure(IllegalArgumentException("Archive file not found"))
+    }
     val targetPath = normalizeArchivePath(archivePath)
-    if (targetPath.isEmpty()) return null
-    val format = detectFormat(archiveFile) ?: return null
+    if (targetPath.isEmpty()) {
+      return Result.failure(IllegalArgumentException("Invalid archive entry path"))
+    }
+    val format = detectFormat(archiveFile)
+      ?: return Result.failure(IllegalArgumentException("Unsupported archive format"))
 
     return try {
-      when (format) {
+      val bytes: ByteArray? = when (format) {
         ArchiveFormat.ZIP -> {
-          ZipInputStream(BufferedInputStream(FileInputStream(archiveFile))).use { zis ->
-            var entry = zis.nextEntry
-            while (entry != null) {
-              if (!entry.isDirectory && normalizeArchivePath(entry.name) == targetPath) {
-                return readLimitedBytes(zis, maxBytes)
+          val cdEntries = parseZipCentralDirectory(archiveFile)
+          if (cdEntries.isNotEmpty()) {
+            val match = cdEntries.firstOrNull { !it.isDirectory && normalizeArchivePath(it.name) == targetPath }
+            if (match != null) {
+              RandomAccessFile(archiveFile, "r").use { raf ->
+                readAndDecodeZipEntryBytes(raf, match, maxBytes, password)
               }
-              zis.closeEntry()
-              entry = zis.nextEntry
+            } else {
+              null
+            }
+          } else {
+            ZipInputStream(BufferedInputStream(FileInputStream(archiveFile))).use { zis ->
+              var found: ByteArray? = null
+              var entry = zis.nextEntry
+              while (entry != null) {
+                if (!entry.isDirectory && normalizeArchivePath(entry.name) == targetPath) {
+                  found = readLimitedBytes(zis, maxBytes)
+                  break
+                }
+                zis.closeEntry()
+                entry = zis.nextEntry
+              }
+              found
             }
           }
-          null
         }
         ArchiveFormat.TAR -> {
           BufferedInputStream(FileInputStream(archiveFile)).use { bis ->
@@ -575,9 +725,29 @@ object ArchiveEngine {
           }
         }
       }
-    } catch (_: Exception) {
-      null
+
+      if (bytes != null) {
+        Result.success(bytes)
+      } else {
+        Result.failure(NoSuchElementException("Entry not found: $targetPath"))
+      }
+    } catch (e: InvalidArchivePasswordException) {
+      Result.failure(e)
+    } catch (e: Exception) {
+      Result.failure(e)
     }
+  }
+
+  /**
+   * Reads the raw bytes of a single file entry from [archiveFile], up to [maxBytes].
+   */
+  fun readEntryBytes(
+    archiveFile: File,
+    archivePath: String,
+    maxBytes: Int = 10 * 1024 * 1024,
+    password: String? = null,
+  ): ByteArray? {
+    return readEntryBytesResult(archiveFile, archivePath, maxBytes, password).getOrNull()
   }
 
   /**
@@ -587,8 +757,9 @@ object ArchiveEngine {
     archiveFile: File,
     archivePath: String,
     maxBytes: Int = 512 * 1024,
+    password: String? = null,
   ): String? {
-    val bytes = readEntryBytes(archiveFile, archivePath, maxBytes) ?: return null
+    val bytes = readEntryBytes(archiveFile, archivePath, maxBytes, password) ?: return null
     return try {
       String(bytes, Charsets.UTF_8)
     } catch (_: Exception) {
@@ -603,9 +774,10 @@ object ArchiveEngine {
     context: Context,
     archiveFile: File,
     entry: ArchiveEntryItem,
+    password: String? = null,
   ): File? {
     if (entry.isDirectory) return null
-    val bytes = readEntryBytes(archiveFile, entry.archivePath) ?: return null
+    val bytes = readEntryBytes(archiveFile, entry.archivePath, password = password) ?: return null
     return try {
       val cacheDir = File(context.cacheDir, "archive_preview").apply { mkdirs() }
       val safeName = entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifEmpty { "entry" }
@@ -624,6 +796,7 @@ object ArchiveEngine {
     archiveFile: File,
     destinationDir: File,
     overwrite: Boolean = true,
+    password: String? = null,
   ): ArchiveOperationResult {
     return extractEntries(
       archiveFile = archiveFile,
@@ -632,6 +805,7 @@ object ArchiveEngine {
       preservePaths = true,
       overwrite = overwrite,
       extractEntireArchive = true,
+      password = password,
     )
   }
 
@@ -646,6 +820,7 @@ object ArchiveEngine {
     preservePaths: Boolean = true,
     overwrite: Boolean = true,
     extractEntireArchive: Boolean = false,
+    password: String? = null,
   ): ArchiveOperationResult {
     if (!archiveFile.exists() || !archiveFile.isFile) {
       return ArchiveOperationResult(
@@ -690,7 +865,12 @@ object ArchiveEngine {
       var extractedCount = 0
       var totalBytes = 0L
 
-      val rawPayloads = readAllRawPayloads(archiveFile, format)
+      val rawPayloads = readAllRawPayloads(
+        archiveFile = archiveFile,
+        format = format,
+        password = password,
+        filterPredicate = ::matchesSelection,
+      )
       for (payload in rawPayloads) {
         if (!isSafeExtractTarget(destinationDir, payload.archivePath)) {
           continue
@@ -737,6 +917,17 @@ object ArchiveEngine {
         totalBytesProcessed = totalBytes,
         message = "Extracted $extractedCount ${if (extractedCount == 1) "file" else "files"} (${FileManagerEngine.formatFileSize(totalBytes)}) to ${destinationDir.name}",
       )
+    } catch (e: InvalidArchivePasswordException) {
+      ArchiveOperationResult(
+        success = false,
+        message = if (e.isMissingPassword) {
+          "Password required to extract encrypted archive"
+        } else {
+          "Incorrect password for ${archiveFile.name}"
+        },
+        passwordRequired = e.isMissingPassword,
+        invalidPassword = !e.isMissingPassword,
+      )
     } catch (e: Exception) {
       ArchiveOperationResult(
         success = false,
@@ -747,12 +938,16 @@ object ArchiveEngine {
 
   /**
    * Creates a new archive at [outputFile] from one or more [sourceFiles] (files and/or directories recursively).
+   * When [password] is non-empty and [format] is [ArchiveFormat.ZIP], file entries are encrypted using
+   * [encryptionMethod] (defaults to [ArchiveEncryptionMethod.AES_256]).
    */
   fun createArchive(
     sourceFiles: List<File>,
     outputFile: File,
     format: ArchiveFormat = ArchiveFormat.ZIP,
     compressionLevel: ArchiveCompressionLevel = ArchiveCompressionLevel.BALANCED,
+    password: String? = null,
+    encryptionMethod: ArchiveEncryptionMethod = ArchiveEncryptionMethod.AES_256,
   ): ArchiveOperationResult {
     val validSources = sourceFiles.filter { it.exists() }
     if (validSources.isEmpty()) {
@@ -760,6 +955,19 @@ object ArchiveEngine {
         success = false,
         message = "Please select at least one existing file or folder to compress",
       )
+    }
+
+    val effectivePassword = password?.takeIf { it.isNotEmpty() }
+    if (effectivePassword != null && !format.supportsPasswordEncryption) {
+      return ArchiveOperationResult(
+        success = false,
+        message = "${format.displayName} does not support password encryption — please choose ZIP",
+      )
+    }
+    val effectiveEncryption = if (effectivePassword != null) {
+      if (encryptionMethod == ArchiveEncryptionMethod.NONE) ArchiveEncryptionMethod.AES_256 else encryptionMethod
+    } else {
+      ArchiveEncryptionMethod.NONE
     }
 
     return try {
@@ -806,17 +1014,20 @@ object ArchiveEngine {
         outputFile = outputFile,
         format = format,
         compressionLevel = compressionLevel,
+        password = effectivePassword,
+        encryptionMethod = effectiveEncryption,
       )
 
       val fileCount = payloads.count { !it.isDirectory }
       val totalUncompressed = payloads.filter { !it.isDirectory }.sumOf { it.bytes.size.toLong() }
+      val encBadge = if (effectivePassword != null) " • ${effectiveEncryption.shortLabel} encrypted" else ""
 
       ArchiveOperationResult(
         success = true,
         outputFile = outputFile,
         extractedFilesCount = fileCount,
         totalBytesProcessed = totalUncompressed,
-        message = "Created ${outputFile.name} with $fileCount ${if (fileCount == 1) "file" else "files"} (${FileManagerEngine.formatFileSize(outputFile.length())})",
+        message = "Created ${outputFile.name} with $fileCount ${if (fileCount == 1) "file" else "files"} (${FileManagerEngine.formatFileSize(outputFile.length())}$encBadge)",
       )
     } catch (e: Exception) {
       ArchiveOperationResult(
@@ -827,14 +1038,92 @@ object ArchiveEngine {
   }
 
   /**
+   * Encrypts an existing `.zip` archive with [newPassword], updates its password/encryption method,
+   * or removes password protection when [newPassword] is `null` or empty.
+   */
+  fun updateArchivePassword(
+    archiveFile: File,
+    currentPassword: String? = null,
+    newPassword: String? = null,
+    encryptionMethod: ArchiveEncryptionMethod = ArchiveEncryptionMethod.AES_256,
+    compressionLevel: ArchiveCompressionLevel = ArchiveCompressionLevel.BALANCED,
+  ): ArchiveOperationResult {
+    if (!archiveFile.exists() || !archiveFile.isFile) {
+      return ArchiveOperationResult(success = false, message = "Archive does not exist")
+    }
+    val format = detectFormat(archiveFile)
+      ?: return ArchiveOperationResult(success = false, message = "Unsupported archive format")
+    if (!format.supportsPasswordEncryption) {
+      return ArchiveOperationResult(
+        success = false,
+        message = "${format.displayName} archives do not support password encryption",
+      )
+    }
+
+    val targetPassword = newPassword?.takeIf { it.isNotEmpty() }
+    val targetMethod = if (targetPassword != null) {
+      if (encryptionMethod == ArchiveEncryptionMethod.NONE) ArchiveEncryptionMethod.AES_256 else encryptionMethod
+    } else {
+      ArchiveEncryptionMethod.NONE
+    }
+
+    return try {
+      val existingPayloads = readAllRawPayloads(archiveFile, format, password = currentPassword)
+      val tempFile = File(
+        archiveFile.parentFile ?: archiveFile.absoluteFile.parentFile,
+        ".${archiveFile.name}.tmp_${System.currentTimeMillis()}",
+      )
+      writeRawPayloadsToFile(
+        payloads = existingPayloads,
+        outputFile = tempFile,
+        format = format,
+        compressionLevel = compressionLevel,
+        password = targetPassword,
+        encryptionMethod = targetMethod,
+      )
+      if (archiveFile.exists()) archiveFile.delete()
+      tempFile.renameTo(archiveFile)
+
+      val msg = if (targetPassword != null) {
+        "Encrypted ${archiveFile.name} with ${targetMethod.shortLabel} password protection"
+      } else {
+        "Removed password protection from ${archiveFile.name}"
+      }
+      ArchiveOperationResult(
+        success = true,
+        outputFile = archiveFile,
+        extractedFilesCount = existingPayloads.count { !it.isDirectory },
+        message = msg,
+      )
+    } catch (e: InvalidArchivePasswordException) {
+      ArchiveOperationResult(
+        success = false,
+        message = if (e.isMissingPassword) {
+          "Current password required to modify encrypted archive"
+        } else {
+          "Incorrect current password"
+        },
+        passwordRequired = e.isMissingPassword,
+        invalidPassword = !e.isMissingPassword,
+      )
+    } catch (e: Exception) {
+      ArchiveOperationResult(
+        success = false,
+        message = "Failed to update archive encryption: ${e.message ?: "Unknown error"}",
+      )
+    }
+  }
+
+  /**
    * Adds one or more [filesToAdd] (files or folders) into an existing writable archive ([ZIP], [TAR], [TAR_GZ])
-   * under [targetVirtualDir].
+   * under [targetVirtualDir], automatically preserving existing ZIP password encryption when present.
    */
   fun addFilesToArchive(
     archiveFile: File,
     filesToAdd: List<File>,
     targetVirtualDir: String = "",
     compressionLevel: ArchiveCompressionLevel = ArchiveCompressionLevel.BALANCED,
+    password: String? = null,
   ): ArchiveOperationResult {
     if (!archiveFile.exists()) {
       return ArchiveOperationResult(success = false, message = "Archive does not exist")
@@ -850,7 +1139,8 @@ object ArchiveEngine {
     }
 
     return try {
-      val existingPayloads = readAllRawPayloads(archiveFile, format).toMutableList()
+      val existingEncryption = detectExistingZipEncryptionMethod(archiveFile, format)
+      val existingPayloads = readAllRawPayloads(archiveFile, format, password = password).toMutableList()
       val usedPaths = existingPayloads.map { normalizeArchivePath(it.archivePath) }.toMutableSet()
       val cleanPrefix = normalizeArchivePath(targetVirtualDir)
 
@@ -866,7 +1156,14 @@ object ArchiveEngine {
 
       val combined = existingPayloads + newPayloads
       val tempFile = File(archiveFile.parentFile ?: archiveFile.absoluteFile.parentFile, ".${archiveFile.name}.tmp_${System.currentTimeMillis()}")
-      writeRawPayloadsToFile(combined, tempFile, format, compressionLevel)
+      writeRawPayloadsToFile(
+        payloads = combined,
+        outputFile = tempFile,
+        format = format,
+        compressionLevel = compressionLevel,
+        password = if (existingEncryption != ArchiveEncryptionMethod.NONE) password else null,
+        encryptionMethod = existingEncryption,
+      )
       if (archiveFile.exists()) archiveFile.delete()
       tempFile.renameTo(archiveFile)
 
@@ -879,6 +1176,13 @@ object ArchiveEngine {
         extractedFilesCount = addedFilesCount,
         totalBytesProcessed = addedBytes,
         message = "Added ${validSources.size} ${if (validSources.size == 1) "item" else "items"} to ${archiveFile.name}",
+      )
+    } catch (e: InvalidArchivePasswordException) {
+      ArchiveOperationResult(
+        success = false,
+        message = if (e.isMissingPassword) "Unlock archive with password before adding files" else "Incorrect archive password",
+        passwordRequired = e.isMissingPassword,
+        invalidPassword = !e.isMissingPassword,
       )
     } catch (e: Exception) {
       ArchiveOperationResult(
@@ -895,6 +1199,7 @@ object ArchiveEngine {
     archiveFile: File,
     parentVirtualDir: String,
     folderName: String,
+    password: String? = null,
   ): ArchiveOperationResult {
     val validationError = FileManagerEngine.validateFileName(folderName)
     if (validationError != null) {
@@ -910,7 +1215,8 @@ object ArchiveEngine {
     val newFolderPath = if (cleanParent.isEmpty()) folderName.trim() else "$cleanParent/${folderName.trim()}"
 
     return try {
-      val existingPayloads = readAllRawPayloads(archiveFile, format).toMutableList()
+      val existingEncryption = detectExistingZipEncryptionMethod(archiveFile, format)
+      val existingPayloads = readAllRawPayloads(archiveFile, format, password = password).toMutableList()
       if (existingPayloads.any { normalizeArchivePath(it.archivePath).equals(newFolderPath, ignoreCase = true) }) {
         return ArchiveOperationResult(success = false, message = "A folder or file with that name already exists")
       }
@@ -923,7 +1229,14 @@ object ArchiveEngine {
         )
       )
       val tempFile = File(archiveFile.parentFile ?: archiveFile.absoluteFile.parentFile, ".${archiveFile.name}.tmp_${System.currentTimeMillis()}")
-      writeRawPayloadsToFile(existingPayloads, tempFile, format, ArchiveCompressionLevel.BALANCED)
+      writeRawPayloadsToFile(
+        payloads = existingPayloads,
+        outputFile = tempFile,
+        format = format,
+        compressionLevel = ArchiveCompressionLevel.BALANCED,
+        password = if (existingEncryption != ArchiveEncryptionMethod.NONE) password else null,
+        encryptionMethod = existingEncryption,
+      )
       if (archiveFile.exists()) archiveFile.delete()
       tempFile.renameTo(archiveFile)
 
@@ -931,6 +1244,13 @@ object ArchiveEngine {
         success = true,
         outputFile = archiveFile,
         message = "Created folder \"${folderName.trim()}\" in ${archiveFile.name}",
+      )
+    } catch (e: InvalidArchivePasswordException) {
+      ArchiveOperationResult(
+        success = false,
+        message = if (e.isMissingPassword) "Unlock archive with password before creating folders" else "Incorrect archive password",
+        passwordRequired = e.isMissingPassword,
+        invalidPassword = !e.isMissingPassword,
       )
     } catch (e: Exception) {
       ArchiveOperationResult(
@@ -946,6 +1266,7 @@ object ArchiveEngine {
   fun deleteEntriesFromArchive(
     archiveFile: File,
     pathsToRemove: Set<String>,
+    password: String? = null,
   ): ArchiveOperationResult {
     val format = detectFormat(archiveFile)
       ?: return ArchiveOperationResult(success = false, message = "Unsupported archive format")
@@ -959,7 +1280,8 @@ object ArchiveEngine {
     }
 
     return try {
-      val existingPayloads = readAllRawPayloads(archiveFile, format)
+      val existingEncryption = detectExistingZipEncryptionMethod(archiveFile, format)
+      val existingPayloads = readAllRawPayloads(archiveFile, format, password = password)
       val remainingPayloads = existingPayloads.filterNot { payload ->
         val clean = normalizeArchivePath(payload.archivePath)
         cleanTargets.any { target -> clean == target || clean.startsWith("$target/") }
@@ -967,7 +1289,14 @@ object ArchiveEngine {
 
       val removedCount = existingPayloads.size - remainingPayloads.size
       val tempFile = File(archiveFile.parentFile ?: archiveFile.absoluteFile.parentFile, ".${archiveFile.name}.tmp_${System.currentTimeMillis()}")
-      writeRawPayloadsToFile(remainingPayloads, tempFile, format, ArchiveCompressionLevel.BALANCED)
+      writeRawPayloadsToFile(
+        payloads = remainingPayloads,
+        outputFile = tempFile,
+        format = format,
+        compressionLevel = ArchiveCompressionLevel.BALANCED,
+        password = if (existingEncryption != ArchiveEncryptionMethod.NONE) password else null,
+        encryptionMethod = existingEncryption,
+      )
       if (archiveFile.exists()) archiveFile.delete()
       tempFile.renameTo(archiveFile)
 
@@ -976,6 +1305,13 @@ object ArchiveEngine {
         outputFile = archiveFile,
         extractedFilesCount = removedCount,
         message = "Removed ${cleanTargets.size} ${if (cleanTargets.size == 1) "item" else "items"} from ${archiveFile.name}",
+      )
+    } catch (e: InvalidArchivePasswordException) {
+      ArchiveOperationResult(
+        success = false,
+        message = if (e.isMissingPassword) "Unlock archive with password before deleting entries" else "Incorrect archive password",
+        passwordRequired = e.isMissingPassword,
+        invalidPassword = !e.isMissingPassword,
       )
     } catch (e: Exception) {
       ArchiveOperationResult(
@@ -992,6 +1328,7 @@ object ArchiveEngine {
     archiveFile: File,
     oldArchivePath: String,
     newLeafName: String,
+    password: String? = null,
   ): ArchiveOperationResult {
     val validationError = FileManagerEngine.validateFileName(newLeafName)
     if (validationError != null) {
@@ -1014,7 +1351,8 @@ object ArchiveEngine {
     }
 
     return try {
-      val existingPayloads = readAllRawPayloads(archiveFile, format)
+      val existingEncryption = detectExistingZipEncryptionMethod(archiveFile, format)
+      val existingPayloads = readAllRawPayloads(archiveFile, format, password = password)
       if (existingPayloads.any {
           val p = normalizeArchivePath(it.archivePath)
           p.equals(cleanNew, ignoreCase = true) || p.startsWith("$cleanNew/", ignoreCase = true)
@@ -1045,7 +1383,14 @@ object ArchiveEngine {
       }
 
       val tempFile = File(archiveFile.parentFile ?: archiveFile.absoluteFile.parentFile, ".${archiveFile.name}.tmp_${System.currentTimeMillis()}")
-      writeRawPayloadsToFile(updatedPayloads, tempFile, format, ArchiveCompressionLevel.BALANCED)
+      writeRawPayloadsToFile(
+        payloads = updatedPayloads,
+        outputFile = tempFile,
+        format = format,
+        compressionLevel = ArchiveCompressionLevel.BALANCED,
+        password = if (existingEncryption != ArchiveEncryptionMethod.NONE) password else null,
+        encryptionMethod = existingEncryption,
+      )
       if (archiveFile.exists()) archiveFile.delete()
       tempFile.renameTo(archiveFile)
 
@@ -1053,6 +1398,13 @@ object ArchiveEngine {
         success = true,
         outputFile = archiveFile,
         message = "Renamed to \"${newLeafName.trim()}\"",
+      )
+    } catch (e: InvalidArchivePasswordException) {
+      ArchiveOperationResult(
+        success = false,
+        message = if (e.isMissingPassword) "Unlock archive with password before renaming entries" else "Incorrect archive password",
+        passwordRequired = e.isMissingPassword,
+        invalidPassword = !e.isMissingPassword,
       )
     } catch (e: Exception) {
       ArchiveOperationResult(
@@ -1170,9 +1522,62 @@ object ArchiveEngine {
     val compressedSize: Long,
     val lastModifiedMs: Long,
     val crc32: Long,
+    val isEncrypted: Boolean = false,
+    val encryptionMethod: ArchiveEncryptionMethod = ArchiveEncryptionMethod.NONE,
   )
 
+  private data class ZipCentralDirEntry(
+    val name: String,
+    val isDirectory: Boolean,
+    val gpFlag: Int,
+    val compressionMethod: Int,
+    val actualCompressionMethod: Int,
+    val dosTime: Int,
+    val dosDate: Int,
+    val lastModifiedMs: Long,
+    val crc32: Long,
+    val compressedSize: Long,
+    val uncompressedSize: Long,
+    val localHeaderOffset: Long,
+    val isEncrypted: Boolean,
+    val encryptionMethod: ArchiveEncryptionMethod,
+    val aesVendorVersion: Int,
+  )
+
+  private fun detectExistingZipEncryptionMethod(
+    archiveFile: File,
+    format: ArchiveFormat,
+  ): ArchiveEncryptionMethod {
+    if (format != ArchiveFormat.ZIP || !archiveFile.exists()) return ArchiveEncryptionMethod.NONE
+    val entries = parseZipCentralDirectory(archiveFile)
+    return entries.firstOrNull { !it.isDirectory && it.isEncrypted }?.encryptionMethod
+      ?: ArchiveEncryptionMethod.NONE
+  }
+
   private fun readZipMetadataEntries(archiveFile: File): List<ParsedRawMetadata> {
+    val cdEntries = parseZipCentralDirectory(archiveFile)
+    if (cdEntries.isNotEmpty()) {
+      val list = mutableListOf<ParsedRawMetadata>()
+      for (entry in cdEntries) {
+        if (entry.name.replace('\\', '/').split('/').any { it == ".." }) continue
+        val normPath = normalizeArchivePath(entry.name)
+        if (normPath.isEmpty()) continue
+        list.add(
+          ParsedRawMetadata(
+            archivePath = normPath,
+            isDirectory = entry.isDirectory,
+            uncompressedSize = if (entry.isDirectory) 0L else entry.uncompressedSize.coerceAtLeast(0L),
+            compressedSize = if (entry.isDirectory) 0L else entry.compressedSize.coerceAtLeast(0L),
+            lastModifiedMs = entry.lastModifiedMs.takeIf { it > 0L } ?: archiveFile.lastModified(),
+            crc32 = entry.crc32.coerceAtLeast(0L),
+            isEncrypted = !entry.isDirectory && entry.isEncrypted,
+            encryptionMethod = if (!entry.isDirectory && entry.isEncrypted) entry.encryptionMethod else ArchiveEncryptionMethod.NONE,
+          )
+        )
+      }
+      return list
+    }
+
     val list = mutableListOf<ParsedRawMetadata>()
     try {
       ZipFile(archiveFile).use { zipFile ->
@@ -1363,6 +1768,8 @@ object ArchiveEngine {
         extension = ext,
         mimeType = mime,
         childCount = null,
+        isEncrypted = raw.isEncrypted,
+        encryptionMethod = raw.encryptionMethod,
       )
     }
 
@@ -1409,32 +1816,60 @@ object ArchiveEngine {
   private fun readAllRawPayloads(
     archiveFile: File,
     format: ArchiveFormat,
+    password: String? = null,
+    filterPredicate: ((String) -> Boolean)? = null,
   ): List<RawEntryPayload> {
     val list = mutableListOf<RawEntryPayload>()
     when (format) {
       ArchiveFormat.ZIP -> {
-        ZipInputStream(BufferedInputStream(FileInputStream(archiveFile))).use { zis ->
-          var entry = zis.nextEntry
-          while (entry != null) {
-            val rawName = entry.name
-            if (!rawName.replace('\\', '/').split('/').any { it == ".." }) {
-              val isDir = entry.isDirectory || rawName.endsWith("/") || rawName.endsWith("\\")
-              val clean = normalizeArchivePath(rawName)
-              if (clean.isNotEmpty()) {
-                val bytes = if (isDir) ByteArray(0) else zis.readBytes()
-                list.add(
-                  RawEntryPayload(
-                    archivePath = clean,
-                    isDirectory = isDir,
-                    bytes = bytes,
-                    lastModifiedMs = entry.time.takeIf { it > 0L } ?: archiveFile.lastModified(),
-                    crc32 = entry.crc.takeIf { it >= 0L } ?: computeCrc32(bytes),
-                  )
-                )
+        val cdEntries = parseZipCentralDirectory(archiveFile)
+        if (cdEntries.isNotEmpty()) {
+          RandomAccessFile(archiveFile, "r").use { raf ->
+            for (entry in cdEntries) {
+              if (entry.name.replace('\\', '/').split('/').any { it == ".." }) continue
+              val clean = normalizeArchivePath(entry.name)
+              if (clean.isEmpty()) continue
+              if (filterPredicate != null && !filterPredicate(clean)) continue
+              val bytes = if (entry.isDirectory) {
+                ByteArray(0)
+              } else {
+                readAndDecodeZipEntryBytes(raf, entry, Int.MAX_VALUE, password)
               }
+              list.add(
+                RawEntryPayload(
+                  archivePath = clean,
+                  isDirectory = entry.isDirectory,
+                  bytes = bytes,
+                  lastModifiedMs = entry.lastModifiedMs.takeIf { it > 0L } ?: archiveFile.lastModified(),
+                  crc32 = if (entry.isDirectory) 0L else computeCrc32(bytes),
+                )
+              )
             }
-            zis.closeEntry()
-            entry = zis.nextEntry
+          }
+        } else {
+          ZipInputStream(BufferedInputStream(FileInputStream(archiveFile))).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+              val rawName = entry.name
+              if (!rawName.replace('\\', '/').split('/').any { it == ".." }) {
+                val isDir = entry.isDirectory || rawName.endsWith("/") || rawName.endsWith("\\")
+                val clean = normalizeArchivePath(rawName)
+                if (clean.isNotEmpty() && (filterPredicate == null || filterPredicate(clean))) {
+                  val bytes = if (isDir) ByteArray(0) else zis.readBytes()
+                  list.add(
+                    RawEntryPayload(
+                      archivePath = clean,
+                      isDirectory = isDir,
+                      bytes = bytes,
+                      lastModifiedMs = entry.time.takeIf { it > 0L } ?: archiveFile.lastModified(),
+                      crc32 = entry.crc.takeIf { it >= 0L } ?: computeCrc32(bytes),
+                    )
+                  )
+                }
+              }
+              zis.closeEntry()
+              entry = zis.nextEntry
+            }
           }
         }
       }
@@ -1550,9 +1985,21 @@ object ArchiveEngine {
     outputFile: File,
     format: ArchiveFormat,
     compressionLevel: ArchiveCompressionLevel,
+    password: String? = null,
+    encryptionMethod: ArchiveEncryptionMethod = ArchiveEncryptionMethod.NONE,
   ) {
     when (format) {
       ArchiveFormat.ZIP -> {
+        if (!password.isNullOrEmpty() && encryptionMethod != ArchiveEncryptionMethod.NONE) {
+          writeEncryptedZipPayloads(
+            payloads = payloads,
+            outputFile = outputFile,
+            compressionLevel = compressionLevel,
+            password = password,
+            encryptionMethod = encryptionMethod,
+          )
+          return
+        }
         ZipOutputStream(BufferedOutputStream(FileOutputStream(outputFile))).use { zos ->
           zos.setLevel(compressionLevel.zipLevel)
           val seenEntries = mutableSetOf<String>()
@@ -1598,6 +2045,840 @@ object ArchiveEngine {
         }
       }
     }
+  }
+
+  // ============================================================================
+  // ZIP CENTRAL DIRECTORY PARSER & AES-256 / ZIPCRYPTO ENCRYPTION CODECS
+  // ============================================================================
+
+  private const val ZIP_SIG_LOCAL_FILE_HEADER = 0x04034b50
+  private const val ZIP_SIG_CENTRAL_FILE_HEADER = 0x02014b50
+  private const val ZIP_SIG_EOCD = 0x06054b50
+  private const val ZIP_METHOD_STORED = 0
+  private const val ZIP_METHOD_DEFLATED = 8
+  private const val ZIP_METHOD_WINZIP_AES = 99
+  private const val ZIP_EXTRA_ZIP64 = 0x0001
+  private const val ZIP_EXTRA_WINZIP_AES = 0x9901
+  private const val WINZIP_PBKDF2_ITERATIONS = 1000
+  private const val WINZIP_AUTH_CODE_BYTES = 10
+
+  private val ZIP_CRC32_TABLE = IntArray(256) { n ->
+    var c = n
+    repeat(8) {
+      c = if ((c and 1) != 0) (c ushr 1) xor 0xEDB88320.toInt() else (c ushr 1)
+    }
+    c
+  }
+
+  private class ZipCryptoState(passwordBytes: ByteArray) {
+    private var key0 = 0x12345678
+    private var key1 = 0x23456789
+    private var key2 = 0x34567890
+
+    init {
+      for (b in passwordBytes) {
+        updateKeys(b.toInt() and 0xFF)
+      }
+    }
+
+    private fun crc32Step(crc: Int, byteVal: Int): Int {
+      return (crc ushr 8) xor ZIP_CRC32_TABLE[(crc xor byteVal) and 0xFF]
+    }
+
+    private fun updateKeys(byteVal: Int) {
+      key0 = crc32Step(key0, byteVal and 0xFF)
+      key1 = (key1 + (key0 and 0xFF)) * 134775813 + 1
+      key2 = crc32Step(key2, (key1 ushr 24) and 0xFF)
+    }
+
+    private fun streamByte(): Int {
+      val temp = (key2 or 2) and 0xFFFF
+      return ((temp * (temp xor 1)) ushr 8) and 0xFF
+    }
+
+    fun encryptBytes(plain: ByteArray): ByteArray {
+      val out = ByteArray(plain.size)
+      for (i in plain.indices) {
+        val p = plain[i].toInt() and 0xFF
+        val c = p xor streamByte()
+        updateKeys(p)
+        out[i] = c.toByte()
+      }
+      return out
+    }
+
+    fun decryptBytes(cipher: ByteArray, offset: Int = 0, length: Int = cipher.size - offset): ByteArray {
+      val out = ByteArray(length)
+      for (i in 0 until length) {
+        val c = cipher[offset + i].toInt() and 0xFF
+        val p = (c xor streamByte()) and 0xFF
+        updateKeys(p)
+        out[i] = p.toByte()
+      }
+      return out
+    }
+  }
+
+  private class CountingOutputStream(private val delegate: OutputStream) : OutputStream() {
+    var bytesWritten: Long = 0L
+      private set
+
+    override fun write(b: Int) {
+      delegate.write(b)
+      bytesWritten++
+    }
+
+    override fun write(b: ByteArray, off: Int, len: Int) {
+      delegate.write(b, off, len)
+      bytesWritten += len
+    }
+
+    override fun flush() = delegate.flush()
+    override fun close() = delegate.close()
+  }
+
+  private data class WrittenCentralDirRecord(
+    val versionMadeBy: Int,
+    val versionNeeded: Int,
+    val gpFlag: Int,
+    val compressionMethod: Int,
+    val dosTime: Int,
+    val dosDate: Int,
+    val crc32: Long,
+    val compressedSize: Long,
+    val uncompressedSize: Long,
+    val nameBytes: ByteArray,
+    val extraBytes: ByteArray,
+    val externalAttrs: Long,
+    val localHeaderOffset: Long,
+  )
+
+  private fun parseZipCentralDirectory(archiveFile: File): List<ZipCentralDirEntry> {
+    if (!archiveFile.exists() || archiveFile.length() < 22L) return emptyList()
+    return try {
+      RandomAccessFile(archiveFile, "r").use { raf ->
+        val fileLen = raf.length()
+        val tailLen = minOf(fileLen, 65_557L).toInt()
+        val tailOffset = fileLen - tailLen
+        val tailBuf = ByteArray(tailLen)
+        raf.seek(tailOffset)
+        raf.readFully(tailBuf)
+
+        var eocdPos = -1
+        for (i in tailLen - 22 downTo 0) {
+          if (readLeInt32(tailBuf, i) == ZIP_SIG_EOCD) {
+            val commentLen = readLeUInt16(tailBuf, i + 20)
+            if (i + 22 + commentLen <= tailLen) {
+              eocdPos = i
+              break
+            }
+          }
+        }
+        if (eocdPos < 0) return emptyList()
+
+        val cdSize = readLeUInt32(tailBuf, eocdPos + 12)
+        val cdOffset = readLeUInt32(tailBuf, eocdPos + 16)
+        if (cdOffset < 0L || cdSize <= 0L || cdOffset + cdSize > fileLen || cdSize > 64L * 1024L * 1024L) {
+          return emptyList()
+        }
+
+        val cdBuf = ByteArray(cdSize.toInt())
+        raf.seek(cdOffset)
+        raf.readFully(cdBuf)
+
+        val entries = mutableListOf<ZipCentralDirEntry>()
+        var cursor = 0
+        while (cursor + 46 <= cdBuf.size) {
+          if (readLeInt32(cdBuf, cursor) != ZIP_SIG_CENTRAL_FILE_HEADER) break
+          val gpFlag = readLeUInt16(cdBuf, cursor + 8)
+          val method = readLeUInt16(cdBuf, cursor + 10)
+          val dosTime = readLeUInt16(cdBuf, cursor + 12)
+          val dosDate = readLeUInt16(cdBuf, cursor + 14)
+          val crc32 = readLeUInt32(cdBuf, cursor + 16)
+          var compSize = readLeUInt32(cdBuf, cursor + 20)
+          var uncompSize = readLeUInt32(cdBuf, cursor + 24)
+          val nameLen = readLeUInt16(cdBuf, cursor + 28)
+          val extraLen = readLeUInt16(cdBuf, cursor + 30)
+          val commentLen = readLeUInt16(cdBuf, cursor + 32)
+          var localOffset = readLeUInt32(cdBuf, cursor + 42)
+
+          val headerTotal = 46 + nameLen + extraLen + commentLen
+          if (cursor + headerTotal > cdBuf.size) break
+
+          val name = String(cdBuf, cursor + 46, nameLen, Charsets.UTF_8)
+          val extraStart = cursor + 46 + nameLen
+          val extraEnd = extraStart + extraLen
+
+          var actualMethod = method
+          var aesVendorVersion = 2
+          var detectedEncMethod = if ((gpFlag and 0x0001) != 0) {
+            if (method == ZIP_METHOD_WINZIP_AES) ArchiveEncryptionMethod.AES_256 else ArchiveEncryptionMethod.ZIP_CRYPTO
+          } else {
+            ArchiveEncryptionMethod.NONE
+          }
+
+          var extPos = extraStart
+          while (extPos + 4 <= extraEnd) {
+            val extId = readLeUInt16(cdBuf, extPos)
+            val extSize = readLeUInt16(cdBuf, extPos + 2)
+            if (extPos + 4 + extSize > extraEnd) break
+            val dataPos = extPos + 4
+
+            when (extId) {
+              ZIP_EXTRA_ZIP64 -> {
+                var zPos = dataPos
+                if (uncompSize == 0xFFFFFFFFL && zPos + 8 <= dataPos + extSize) {
+                  uncompSize = readLeInt64(cdBuf, zPos)
+                  zPos += 8
+                }
+                if (compSize == 0xFFFFFFFFL && zPos + 8 <= dataPos + extSize) {
+                  compSize = readLeInt64(cdBuf, zPos)
+                  zPos += 8
+                }
+                if (localOffset == 0xFFFFFFFFL && zPos + 8 <= dataPos + extSize) {
+                  localOffset = readLeInt64(cdBuf, zPos)
+                }
+              }
+              ZIP_EXTRA_WINZIP_AES -> {
+                if (extSize >= 7) {
+                  aesVendorVersion = readLeUInt16(cdBuf, dataPos)
+                  val strength = cdBuf[dataPos + 4].toInt() and 0xFF
+                  actualMethod = readLeUInt16(cdBuf, dataPos + 5)
+                  detectedEncMethod = ArchiveEncryptionMethod.fromAesStrength(strength)
+                }
+              }
+            }
+            extPos += 4 + extSize
+          }
+
+          val isDir = name.endsWith("/") || name.endsWith("\\")
+          val isEncrypted = !isDir && ((gpFlag and 0x0001) != 0 || method == ZIP_METHOD_WINZIP_AES)
+
+          entries.add(
+            ZipCentralDirEntry(
+              name = name,
+              isDirectory = isDir,
+              gpFlag = gpFlag,
+              compressionMethod = method,
+              actualCompressionMethod = actualMethod,
+              dosTime = dosTime,
+              dosDate = dosDate,
+              lastModifiedMs = dosDateTimeToEpochMs(dosTime, dosDate),
+              crc32 = crc32,
+              compressedSize = compSize,
+              uncompressedSize = uncompSize,
+              localHeaderOffset = localOffset,
+              isEncrypted = isEncrypted,
+              encryptionMethod = if (isEncrypted) detectedEncMethod else ArchiveEncryptionMethod.NONE,
+              aesVendorVersion = aesVendorVersion,
+            )
+          )
+
+          cursor += headerTotal
+        }
+        entries
+      }
+    } catch (_: Exception) {
+      emptyList()
+    }
+  }
+
+  private fun readAndDecodeZipEntryBytes(
+    raf: RandomAccessFile,
+    entry: ZipCentralDirEntry,
+    maxBytes: Int,
+    password: String?,
+  ): ByteArray {
+    if (entry.isDirectory) return ByteArray(0)
+    if (entry.localHeaderOffset < 0L || entry.localHeaderOffset + 30L > raf.length()) {
+      throw IllegalArgumentException("Corrupt ZIP local header offset")
+    }
+
+    raf.seek(entry.localHeaderOffset)
+    val localHeader = ByteArray(30)
+    raf.readFully(localHeader)
+    if (readLeInt32(localHeader, 0) != ZIP_SIG_LOCAL_FILE_HEADER) {
+      throw IllegalArgumentException("Invalid ZIP local file header signature")
+    }
+
+    val localNameLen = readLeUInt16(localHeader, 26)
+    val localExtraLen = readLeUInt16(localHeader, 28)
+
+    var effectiveEncMethod = entry.encryptionMethod
+    var effectiveActualMethod = entry.actualCompressionMethod
+    var effectiveVendorVer = entry.aesVendorVersion
+
+    if (localExtraLen > 0) {
+      val localExtra = ByteArray(localExtraLen)
+      raf.seek(entry.localHeaderOffset + 30L + localNameLen)
+      raf.readFully(localExtra)
+      var extPos = 0
+      while (extPos + 4 <= localExtra.size) {
+        val extId = readLeUInt16(localExtra, extPos)
+        val extSize = readLeUInt16(localExtra, extPos + 2)
+        if (extPos + 4 + extSize > localExtra.size) break
+        if (extId == ZIP_EXTRA_WINZIP_AES && extSize >= 7) {
+          effectiveVendorVer = readLeUInt16(localExtra, extPos + 4)
+          val strength = localExtra[extPos + 8].toInt() and 0xFF
+          effectiveActualMethod = readLeUInt16(localExtra, extPos + 9)
+          effectiveEncMethod = ArchiveEncryptionMethod.fromAesStrength(strength)
+        }
+        extPos += 4 + extSize
+      }
+    }
+
+    val dataOffset = entry.localHeaderOffset + 30L + localNameLen + localExtraLen
+    val compSize = entry.compressedSize.coerceAtLeast(0L)
+    if (dataOffset + compSize > raf.length()) {
+      throw IllegalArgumentException("Truncated ZIP entry payload")
+    }
+
+    raf.seek(dataOffset)
+    val rawCompressed = ByteArray(compSize.toInt())
+    raf.readFully(rawCompressed)
+
+    if (!entry.isEncrypted) {
+      val decoded = decompressZipPayload(rawCompressed, effectiveActualMethod, maxBytes)
+      return if (decoded.size > maxBytes) decoded.copyOf(maxBytes) else decoded
+    }
+
+    if (password.isNullOrEmpty()) {
+      throw InvalidArchivePasswordException(
+        message = "Password required to unlock encrypted archive",
+        isMissingPassword = true,
+      )
+    }
+
+    val passwordEncodings = buildList {
+      add(password.toByteArray(Charsets.UTF_8))
+      if (password.any { it.code > 127 }) {
+        add(password.toByteArray(Charsets.ISO_8859_1))
+      }
+    }
+
+    if (effectiveEncMethod.isAes || entry.compressionMethod == ZIP_METHOD_WINZIP_AES) {
+      val aesMethod = if (effectiveEncMethod.isAes) effectiveEncMethod else ArchiveEncryptionMethod.AES_256
+      val saltLen = aesMethod.saltLength
+      val keyLen = aesMethod.keyLength
+      val minOverhead = saltLen + 2 + WINZIP_AUTH_CODE_BYTES
+      if (rawCompressed.size < minOverhead) {
+        throw IllegalArgumentException("Truncated AES-encrypted ZIP entry")
+      }
+
+      val salt = rawCompressed.copyOfRange(0, saltLen)
+      val pvExpected = rawCompressed.copyOfRange(saltLen, saltLen + 2)
+      val cipherLen = rawCompressed.size - minOverhead
+      val ciphertext = rawCompressed.copyOfRange(saltLen + 2, saltLen + 2 + cipherLen)
+      val macExpected = rawCompressed.copyOfRange(saltLen + 2 + cipherLen, rawCompressed.size)
+
+      for (pwBytes in passwordEncodings) {
+        val derived = pbkdf2HmacSha1(
+          passwordBytes = pwBytes,
+          salt = salt,
+          iterations = WINZIP_PBKDF2_ITERATIONS,
+          derivedLength = 2 * keyLen + 2,
+        )
+        val pv0 = derived[2 * keyLen]
+        val pv1 = derived[2 * keyLen + 1]
+        if (pv0 != pvExpected[0] || pv1 != pvExpected[1]) continue
+
+        val hmacKey = derived.copyOfRange(keyLen, 2 * keyLen)
+        val computedMac10 = hmacSha1First10(hmacKey, ciphertext)
+        if (!MessageDigest.isEqual(computedMac10, macExpected)) continue
+
+        val aesKey = derived.copyOfRange(0, keyLen)
+        val decryptedCompressed = aesCtrWinZip(aesKey, ciphertext)
+        val plaintext = decompressZipPayload(decryptedCompressed, effectiveActualMethod, maxBytes)
+
+        if (effectiveVendorVer == 1 && entry.crc32 != 0L && plaintext.size.toLong() == entry.uncompressedSize) {
+          if (computeCrc32(plaintext) != entry.crc32) {
+            throw InvalidArchivePasswordException("CRC-32 mismatch after AES-AE1 decryption")
+          }
+        }
+        return if (plaintext.size > maxBytes) plaintext.copyOf(maxBytes) else plaintext
+      }
+      throw InvalidArchivePasswordException("Incorrect password")
+    } else {
+      // PKWARE Traditional ZipCrypto
+      if (rawCompressed.size < 12) {
+        throw IllegalArgumentException("Truncated ZipCrypto entry")
+      }
+      val expectedCrcCheck = ((entry.crc32 ushr 24) and 0xFFL).toInt()
+      val expectedTimeCheck = (entry.dosTime ushr 8) and 0xFF
+
+      for (pwBytes in passwordEncodings) {
+        val crypto = ZipCryptoState(pwBytes)
+        val decHeader = crypto.decryptBytes(rawCompressed, 0, 12)
+        val checkByte = decHeader[11].toInt() and 0xFF
+        val hasDataDescriptor = (entry.gpFlag and 0x0008) != 0
+        val headerMatches = if (hasDataDescriptor) {
+          checkByte == expectedTimeCheck || checkByte == expectedCrcCheck
+        } else {
+          checkByte == expectedCrcCheck || checkByte == expectedTimeCheck
+        }
+        if (!headerMatches) continue
+
+        val decryptedCompressed = crypto.decryptBytes(rawCompressed, 12, rawCompressed.size - 12)
+        val fullPlaintext = try {
+          decompressZipPayload(decryptedCompressed, effectiveActualMethod, Int.MAX_VALUE)
+        } catch (_: Exception) {
+          continue
+        }
+
+        if (fullPlaintext.size.toLong() != entry.uncompressedSize) continue
+        if (computeCrc32(fullPlaintext) != entry.crc32) continue
+
+        return if (fullPlaintext.size > maxBytes) fullPlaintext.copyOf(maxBytes) else fullPlaintext
+      }
+      throw InvalidArchivePasswordException("Incorrect password")
+    }
+  }
+
+  private fun writeEncryptedZipPayloads(
+    payloads: List<RawEntryPayload>,
+    outputFile: File,
+    compressionLevel: ArchiveCompressionLevel,
+    password: String,
+    encryptionMethod: ArchiveEncryptionMethod,
+  ) {
+    val secureRandom = SecureRandom()
+    val passwordBytes = password.toByteArray(Charsets.UTF_8)
+    val cdRecords = mutableListOf<WrittenCentralDirRecord>()
+    val seenEntries = mutableSetOf<String>()
+
+    CountingOutputStream(BufferedOutputStream(FileOutputStream(outputFile))).use { out ->
+      for (payload in payloads) {
+        val clean = normalizeArchivePath(payload.archivePath)
+        if (clean.isEmpty()) continue
+        val entryName = if (payload.isDirectory) "$clean/" else clean
+        if (!seenEntries.add(entryName)) continue
+
+        val nameBytes = entryName.toByteArray(Charsets.UTF_8)
+        val ts = payload.lastModifiedMs.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val (dosTime, dosDate) = epochMsToDosDateTime(ts)
+        val localOffset = out.bytesWritten
+
+        if (payload.isDirectory) {
+          val gpFlag = 0x0800 // UTF-8
+          writeLocalFileHeader(
+            out = out,
+            versionNeeded = 20,
+            gpFlag = gpFlag,
+            compressionMethod = ZIP_METHOD_STORED,
+            dosTime = dosTime,
+            dosDate = dosDate,
+            crc32 = 0L,
+            compressedSize = 0L,
+            uncompressedSize = 0L,
+            nameBytes = nameBytes,
+            extraBytes = ByteArray(0),
+          )
+          cdRecords.add(
+            WrittenCentralDirRecord(
+              versionMadeBy = 20,
+              versionNeeded = 20,
+              gpFlag = gpFlag,
+              compressionMethod = ZIP_METHOD_STORED,
+              dosTime = dosTime,
+              dosDate = dosDate,
+              crc32 = 0L,
+              compressedSize = 0L,
+              uncompressedSize = 0L,
+              nameBytes = nameBytes,
+              extraBytes = ByteArray(0),
+              externalAttrs = 0x10L, // MS-DOS directory attribute
+              localHeaderOffset = localOffset,
+            )
+          )
+          continue
+        }
+
+        val plainBytes = payload.bytes
+        val plainCrc32 = computeCrc32(plainBytes)
+        val useDeflate = compressionLevel != ArchiveCompressionLevel.STORE && plainBytes.isNotEmpty()
+        val actualMethod = if (useDeflate) ZIP_METHOD_DEFLATED else ZIP_METHOD_STORED
+        val compressedRaw = if (useDeflate) {
+          deflateRaw(plainBytes, compressionLevel.zipLevel)
+        } else {
+          plainBytes
+        }
+
+        if (encryptionMethod.isAes) {
+          val aesMethod = encryptionMethod
+          val salt = ByteArray(aesMethod.saltLength).also { secureRandom.nextBytes(it) }
+          val derived = pbkdf2HmacSha1(
+            passwordBytes = passwordBytes,
+            salt = salt,
+            iterations = WINZIP_PBKDF2_ITERATIONS,
+            derivedLength = 2 * aesMethod.keyLength + 2,
+          )
+          val aesKey = derived.copyOfRange(0, aesMethod.keyLength)
+          val hmacKey = derived.copyOfRange(aesMethod.keyLength, 2 * aesMethod.keyLength)
+          val pvBytes = derived.copyOfRange(2 * aesMethod.keyLength, 2 * aesMethod.keyLength + 2)
+
+          val ciphertext = aesCtrWinZip(aesKey, compressedRaw)
+          val authCode10 = hmacSha1First10(hmacKey, ciphertext)
+          val encryptedSize = (salt.size + 2 + ciphertext.size + WINZIP_AUTH_CODE_BYTES).toLong()
+
+          val aesExtra = ByteArray(11)
+          writeLeUInt16(aesExtra, 0, ZIP_EXTRA_WINZIP_AES)
+          writeLeUInt16(aesExtra, 2, 7)
+          writeLeUInt16(aesExtra, 4, 2) // AE-2
+          writeLeUInt16(aesExtra, 6, 0x4541) // "AE"
+          aesExtra[8] = aesMethod.aesStrengthByte.toByte()
+          writeLeUInt16(aesExtra, 9, actualMethod)
+
+          val gpFlag = 0x0001 or 0x0800 // Encrypted + UTF-8
+          writeLocalFileHeader(
+            out = out,
+            versionNeeded = 51,
+            gpFlag = gpFlag,
+            compressionMethod = ZIP_METHOD_WINZIP_AES,
+            dosTime = dosTime,
+            dosDate = dosDate,
+            crc32 = 0L, // AE-2 omits plaintext CRC-32 from header
+            compressedSize = encryptedSize,
+            uncompressedSize = plainBytes.size.toLong(),
+            nameBytes = nameBytes,
+            extraBytes = aesExtra,
+          )
+          out.write(salt)
+          out.write(pvBytes)
+          if (ciphertext.isNotEmpty()) out.write(ciphertext)
+          out.write(authCode10)
+
+          cdRecords.add(
+            WrittenCentralDirRecord(
+              versionMadeBy = 51,
+              versionNeeded = 51,
+              gpFlag = gpFlag,
+              compressionMethod = ZIP_METHOD_WINZIP_AES,
+              dosTime = dosTime,
+              dosDate = dosDate,
+              crc32 = 0L,
+              compressedSize = encryptedSize,
+              uncompressedSize = plainBytes.size.toLong(),
+              nameBytes = nameBytes,
+              extraBytes = aesExtra,
+              externalAttrs = 0L,
+              localHeaderOffset = localOffset,
+            )
+          )
+        } else {
+          // ZipCrypto (PKWARE traditional encryption)
+          val crypto = ZipCryptoState(passwordBytes)
+          val headerPlain = ByteArray(12).also { secureRandom.nextBytes(it) }
+          headerPlain[11] = ((plainCrc32 ushr 24) and 0xFFL).toByte()
+          val encryptedHeader = crypto.encryptBytes(headerPlain)
+          val encryptedBody = crypto.encryptBytes(compressedRaw)
+          val encryptedSize = (12 + encryptedBody.size).toLong()
+
+          val gpFlag = 0x0001 or 0x0800 // Encrypted + UTF-8
+          writeLocalFileHeader(
+            out = out,
+            versionNeeded = 20,
+            gpFlag = gpFlag,
+            compressionMethod = actualMethod,
+            dosTime = dosTime,
+            dosDate = dosDate,
+            crc32 = plainCrc32,
+            compressedSize = encryptedSize,
+            uncompressedSize = plainBytes.size.toLong(),
+            nameBytes = nameBytes,
+            extraBytes = ByteArray(0),
+          )
+          out.write(encryptedHeader)
+          if (encryptedBody.isNotEmpty()) out.write(encryptedBody)
+
+          cdRecords.add(
+            WrittenCentralDirRecord(
+              versionMadeBy = 20,
+              versionNeeded = 20,
+              gpFlag = gpFlag,
+              compressionMethod = actualMethod,
+              dosTime = dosTime,
+              dosDate = dosDate,
+              crc32 = plainCrc32,
+              compressedSize = encryptedSize,
+              uncompressedSize = plainBytes.size.toLong(),
+              nameBytes = nameBytes,
+              extraBytes = ByteArray(0),
+              externalAttrs = 0L,
+              localHeaderOffset = localOffset,
+            )
+          )
+        }
+      }
+
+      val cdOffset = out.bytesWritten
+      for (rec in cdRecords) {
+        val header = ByteArray(46)
+        writeLeInt32(header, 0, ZIP_SIG_CENTRAL_FILE_HEADER)
+        writeLeUInt16(header, 4, rec.versionMadeBy)
+        writeLeUInt16(header, 6, rec.versionNeeded)
+        writeLeUInt16(header, 8, rec.gpFlag)
+        writeLeUInt16(header, 10, rec.compressionMethod)
+        writeLeUInt16(header, 12, rec.dosTime)
+        writeLeUInt16(header, 14, rec.dosDate)
+        writeLeUInt32(header, 16, rec.crc32)
+        writeLeUInt32(header, 20, rec.compressedSize)
+        writeLeUInt32(header, 24, rec.uncompressedSize)
+        writeLeUInt16(header, 28, rec.nameBytes.size)
+        writeLeUInt16(header, 30, rec.extraBytes.size)
+        writeLeUInt16(header, 32, 0) // comment len
+        writeLeUInt16(header, 34, 0) // disk start
+        writeLeUInt16(header, 36, 0) // internal attrs
+        writeLeUInt32(header, 38, rec.externalAttrs)
+        writeLeUInt32(header, 42, rec.localHeaderOffset)
+
+        out.write(header)
+        out.write(rec.nameBytes)
+        if (rec.extraBytes.isNotEmpty()) out.write(rec.extraBytes)
+      }
+
+      val cdSize = out.bytesWritten - cdOffset
+      val eocd = ByteArray(22)
+      writeLeInt32(eocd, 0, ZIP_SIG_EOCD)
+      writeLeUInt16(eocd, 4, 0)
+      writeLeUInt16(eocd, 6, 0)
+      writeLeUInt16(eocd, 8, cdRecords.size)
+      writeLeUInt16(eocd, 10, cdRecords.size)
+      writeLeUInt32(eocd, 12, cdSize)
+      writeLeUInt32(eocd, 16, cdOffset)
+      writeLeUInt16(eocd, 20, 0)
+      out.write(eocd)
+      out.flush()
+    }
+  }
+
+  private fun writeLocalFileHeader(
+    out: OutputStream,
+    versionNeeded: Int,
+    gpFlag: Int,
+    compressionMethod: Int,
+    dosTime: Int,
+    dosDate: Int,
+    crc32: Long,
+    compressedSize: Long,
+    uncompressedSize: Long,
+    nameBytes: ByteArray,
+    extraBytes: ByteArray,
+  ) {
+    val header = ByteArray(30)
+    writeLeInt32(header, 0, ZIP_SIG_LOCAL_FILE_HEADER)
+    writeLeUInt16(header, 4, versionNeeded)
+    writeLeUInt16(header, 6, gpFlag)
+    writeLeUInt16(header, 8, compressionMethod)
+    writeLeUInt16(header, 10, dosTime)
+    writeLeUInt16(header, 12, dosDate)
+    writeLeUInt32(header, 14, crc32)
+    writeLeUInt32(header, 18, compressedSize)
+    writeLeUInt32(header, 22, uncompressedSize)
+    writeLeUInt16(header, 26, nameBytes.size)
+    writeLeUInt16(header, 28, extraBytes.size)
+    out.write(header)
+    out.write(nameBytes)
+    if (extraBytes.isNotEmpty()) out.write(extraBytes)
+  }
+
+  private fun pbkdf2HmacSha1(
+    passwordBytes: ByteArray,
+    salt: ByteArray,
+    iterations: Int,
+    derivedLength: Int,
+  ): ByteArray {
+    val mac = Mac.getInstance("HmacSHA1")
+    val keyBytes = if (passwordBytes.isEmpty()) ByteArray(1) else passwordBytes
+    mac.init(SecretKeySpec(keyBytes, "HmacSHA1"))
+    val hLen = 20
+    val blocks = (derivedLength + hLen - 1) / hLen
+    val derived = ByteArray(blocks * hLen)
+    val saltWithBlock = ByteArray(salt.size + 4)
+    System.arraycopy(salt, 0, saltWithBlock, 0, salt.size)
+
+    for (blockIndex in 1..blocks) {
+      saltWithBlock[salt.size] = ((blockIndex ushr 24) and 0xFF).toByte()
+      saltWithBlock[salt.size + 1] = ((blockIndex ushr 16) and 0xFF).toByte()
+      saltWithBlock[salt.size + 2] = ((blockIndex ushr 8) and 0xFF).toByte()
+      saltWithBlock[salt.size + 3] = (blockIndex and 0xFF).toByte()
+
+      var u = mac.doFinal(saltWithBlock)
+      val t = u.copyOf()
+      for (iter in 2..iterations) {
+        u = mac.doFinal(u)
+        for (j in 0 until hLen) {
+          t[j] = (t[j].toInt() xor u[j].toInt()).toByte()
+        }
+      }
+      System.arraycopy(t, 0, derived, (blockIndex - 1) * hLen, hLen)
+    }
+    return if (derived.size == derivedLength) derived else derived.copyOf(derivedLength)
+  }
+
+  private fun aesCtrWinZip(aesKey: ByteArray, input: ByteArray): ByteArray {
+    if (input.isEmpty()) return ByteArray(0)
+    val cipher = Cipher.getInstance("AES/ECB/NoPadding")
+    cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(aesKey, "AES"))
+    val counter = ByteArray(16)
+    val keystreamBlock = ByteArray(16)
+    val out = ByteArray(input.size)
+
+    var offset = 0
+    while (offset < input.size) {
+      // WinZip AES uses a 128-bit little-endian block counter starting at 1
+      for (i in 0 until 16) {
+        val next = (counter[i].toInt() and 0xFF) + 1
+        counter[i] = next.toByte()
+        if (next <= 0xFF) break
+      }
+      cipher.update(counter, 0, 16, keystreamBlock, 0)
+      val chunk = minOf(16, input.size - offset)
+      for (j in 0 until chunk) {
+        out[offset + j] = (input[offset + j].toInt() xor keystreamBlock[j].toInt()).toByte()
+      }
+      offset += chunk
+    }
+    return out
+  }
+
+  private fun hmacSha1First10(hmacKey: ByteArray, data: ByteArray): ByteArray {
+    val mac = Mac.getInstance("HmacSHA1")
+    mac.init(SecretKeySpec(hmacKey, "HmacSHA1"))
+    return mac.doFinal(data).copyOf(WINZIP_AUTH_CODE_BYTES)
+  }
+
+  private fun deflateRaw(input: ByteArray, level: Int): ByteArray {
+    if (input.isEmpty()) return ByteArray(0)
+    val deflater = Deflater(level, true)
+    return try {
+      deflater.setInput(input)
+      deflater.finish()
+      val out = ByteArrayOutputStream(minOf(input.size + 64, 65_536))
+      val buf = ByteArray(8192)
+      while (!deflater.finished()) {
+        val count = deflater.deflate(buf)
+        if (count > 0) {
+          out.write(buf, 0, count)
+        } else if (deflater.needsInput()) {
+          break
+        }
+      }
+      out.toByteArray()
+    } finally {
+      deflater.end()
+    }
+  }
+
+  private fun decompressZipPayload(
+    compressed: ByteArray,
+    method: Int,
+    maxBytes: Int,
+  ): ByteArray {
+    return when (method) {
+      ZIP_METHOD_STORED -> {
+        if (compressed.size > maxBytes) compressed.copyOf(maxBytes) else compressed
+      }
+      ZIP_METHOD_DEFLATED -> inflateRaw(compressed, maxBytes)
+      else -> throw IllegalArgumentException("Unsupported ZIP compression method: $method")
+    }
+  }
+
+  private fun inflateRaw(compressed: ByteArray, maxBytes: Int): ByteArray {
+    if (compressed.isEmpty() || maxBytes <= 0) return ByteArray(0)
+    val inflater = Inflater(true)
+    return try {
+      // Append 1 dummy byte per java.util.zip.Inflater(nowrap=true) contract
+      val padded = ByteArray(compressed.size + 1)
+      System.arraycopy(compressed, 0, padded, 0, compressed.size)
+      inflater.setInput(padded)
+
+      val out = ByteArrayOutputStream()
+      val buf = ByteArray(8192)
+      var remaining = maxBytes
+      while (!inflater.finished() && remaining > 0) {
+        val count = try {
+          inflater.inflate(buf, 0, minOf(buf.size, remaining))
+        } catch (e: DataFormatException) {
+          throw IllegalArgumentException("Corrupt deflated stream", e)
+        }
+        if (count > 0) {
+          out.write(buf, 0, count)
+          remaining -= count
+        } else if (inflater.needsInput() || inflater.needsDictionary()) {
+          break
+        }
+      }
+      out.toByteArray()
+    } finally {
+      inflater.end()
+    }
+  }
+
+  private fun dosDateTimeToEpochMs(dosTime: Int, dosDate: Int): Long {
+    if (dosDate == 0 && dosTime == 0) return 0L
+    val year = ((dosDate ushr 9) and 0x7F) + 1980
+    val month = (((dosDate ushr 5) and 0x0F) - 1).coerceIn(0, 11)
+    val day = (dosDate and 0x1F).coerceIn(1, 31)
+    val hour = ((dosTime ushr 11) and 0x1F).coerceIn(0, 23)
+    val minute = ((dosTime ushr 5) and 0x3F).coerceIn(0, 59)
+    val second = ((dosTime and 0x1F) * 2).coerceIn(0, 59)
+    return Calendar.getInstance().apply {
+      set(year, month, day, hour, minute, second)
+      set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+  }
+
+  private fun epochMsToDosDateTime(epochMs: Long): Pair<Int, Int> {
+    val cal = Calendar.getInstance().apply { timeInMillis = epochMs }
+    val year = cal.get(Calendar.YEAR)
+    if (year < 1980) {
+      return 0 to ((1 shl 5) or 1)
+    }
+    val dosDate = (((year - 1980).coerceAtMost(127) shl 9) or
+      ((cal.get(Calendar.MONTH) + 1) shl 5) or
+      cal.get(Calendar.DAY_OF_MONTH))
+    val dosTime = ((cal.get(Calendar.HOUR_OF_DAY) shl 11) or
+      (cal.get(Calendar.MINUTE) shl 5) or
+      (cal.get(Calendar.SECOND) / 2))
+    return dosTime to dosDate
+  }
+
+  private fun readLeUInt16(buf: ByteArray, offset: Int): Int {
+    return (buf[offset].toInt() and 0xFF) or
+      ((buf[offset + 1].toInt() and 0xFF) shl 8)
+  }
+
+  private fun readLeInt32(buf: ByteArray, offset: Int): Int {
+    return (buf[offset].toInt() and 0xFF) or
+      ((buf[offset + 1].toInt() and 0xFF) shl 8) or
+      ((buf[offset + 2].toInt() and 0xFF) shl 16) or
+      ((buf[offset + 3].toInt() and 0xFF) shl 24)
+  }
+
+  private fun readLeUInt32(buf: ByteArray, offset: Int): Long {
+    return readLeInt32(buf, offset).toLong() and 0xFFFFFFFFL
+  }
+
+  private fun readLeInt64(buf: ByteArray, offset: Int): Long {
+    val lo = readLeUInt32(buf, offset)
+    val hi = readLeUInt32(buf, offset + 4)
+    return lo or (hi shl 32)
+  }
+
+  private fun writeLeUInt16(buf: ByteArray, offset: Int, value: Int) {
+    buf[offset] = (value and 0xFF).toByte()
+    buf[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+  }
+
+  private fun writeLeInt32(buf: ByteArray, offset: Int, value: Int) {
+    buf[offset] = (value and 0xFF).toByte()
+    buf[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+    buf[offset + 2] = ((value ushr 16) and 0xFF).toByte()
+    buf[offset + 3] = ((value ushr 24) and 0xFF).toByte()
+  }
+
+  private fun writeLeUInt32(buf: ByteArray, offset: Int, value: Long) {
+    writeLeInt32(buf, offset, (value and 0xFFFFFFFFL).toInt())
   }
 
   private fun writeTarPayloads(payloads: List<RawEntryPayload>, out: OutputStream) {

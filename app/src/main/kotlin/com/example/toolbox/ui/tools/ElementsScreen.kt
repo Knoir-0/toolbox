@@ -739,21 +739,17 @@ fun ElementsScreen(
         Box(
           modifier = Modifier
             .fillMaxSize()
-            .weight(1f)
-            .swipeToSwitchPillView(
-              items = ElementsDisplayMode.entries,
-              selectedItem = displayMode,
-              enabled = !isSearchActive,
-              onSelectItem = { mode ->
-                displayMode = mode
-              },
-            ),
+            .weight(1f),
         ) {
-          AnimatedContent(
-            targetState = displayMode,
-            transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
+          ToolboxPillHorizontalPager(
+            items = ElementsDisplayMode.entries,
+            selectedItem = displayMode,
+            enabled = !isSearchActive,
+            key = { _, mode -> mode.name },
+            onSelectItem = { mode ->
+              displayMode = mode
+            },
             modifier = Modifier.fillMaxSize(),
-            label = "elements_display_mode_content",
           ) { mode ->
             when (mode) {
               ElementsDisplayMode.TABLE -> {

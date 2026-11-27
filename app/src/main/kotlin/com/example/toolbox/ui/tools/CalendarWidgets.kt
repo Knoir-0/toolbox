@@ -284,6 +284,7 @@ object CalendarWidgets {
   }
 
   private fun collectAllEventsForYears(
+    context: Context?,
     calendarRepository: CalendarRepository?,
     todoRepository: TodoListRepository?,
     years: Set<Int>,
@@ -292,6 +293,15 @@ object CalendarWidgets {
     val enabledCategories = calendarRepository?.getEnabledCategories() ?: CalendarCategory.entries.toSet()
     val showHolidays = calendarRepository?.getShowHolidays() ?: true
     val showTodos = calendarRepository?.getShowTodos() ?: true
+    val deviceEvents = if (context != null) {
+      DeviceCalendarHelper.queryEventsForYears(
+        context = context,
+        years = years,
+        repository = calendarRepository,
+      )
+    } else {
+      emptyList()
+    }
 
     val holidayEvents = if (showHolidays) {
       years.flatMap { y -> CalendarEngine.builtInHolidaysForYear(y) }
@@ -307,13 +317,13 @@ object CalendarWidgets {
       emptyList()
     }
 
-    return (userEvents + todoEvents + holidayEvents) to enabledCategories
+    return (userEvents + deviceEvents + todoEvents + holidayEvents) to enabledCategories
   }
 
   fun buildScheduleItemMetadata(event: CalendarEvent): String {
     return buildList {
       add(CalendarEngine.formatTimeRange(event.startMillis, event.endMillis, event.isAllDay))
-      add(event.category.displayName)
+      add(event.calendarSourceLabel)
       if (event.recurrence != CalendarRecurrence.NONE) {
         add(event.recurrence.shortLabel)
       }
@@ -342,6 +352,7 @@ object CalendarWidgets {
       if (focusedDay.month >= 11) add(focusedDay.year + 1)
     }
     val (allEvents, enabledCategories) = collectAllEventsForYears(
+      context = context,
       calendarRepository = calendarRepository,
       todoRepository = todoRepository,
       years = yearsToLoad,
@@ -442,6 +453,7 @@ object CalendarWidgets {
     val gridDays = CalendarEngine.buildMonthGridDays(year, month)
     val yearsInGrid = gridDays.map { it.year }.toSet()
     val (allEvents, enabledCategories) = collectAllEventsForYears(
+      context = context,
       calendarRepository = calendarRepository,
       todoRepository = todoRepository,
       years = yearsInGrid,
@@ -1178,6 +1190,22 @@ object CalendarWidgets {
   ): Boolean {
     if (eventId.isNullOrBlank()) return false
     val repo = calendarRepository ?: return false
+    // Handle device calendar instance IDs ("device_cal_<calId>_ev_<evId>_<startMillis>")
+    if (eventId.startsWith("device_cal_")) {
+      val match = Regex("^device_cal_(\\d+)_ev_(\\d+)_").find(eventId)
+      if (match != null) {
+        val calId = match.groupValues[1]
+        val devEvId = match.groupValues[2]
+        val favKey = "device_ev_${calId}_$devEvId"
+        val existingKeys = repo.getFavoriteEventKeys()
+        val updatedKeys = if (favKey in existingKeys) existingKeys - favKey else existingKeys + favKey
+        repo.setFavoriteEventKeys(updatedKeys)
+        if (context != null) {
+          updateAllWidgets(context)
+        }
+        return true
+      }
+    }
     val currentEvents = repo.loadEvents()
     val target = currentEvents.firstOrNull { it.id == eventId } ?: return false
     if (target.isReadOnlyBuiltIn) return false

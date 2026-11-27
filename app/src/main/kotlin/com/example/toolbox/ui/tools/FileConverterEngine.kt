@@ -49,6 +49,8 @@ import java.util.zip.ZipOutputStream
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -577,6 +579,7 @@ object FileConverterEngine {
   const val WHISPER_BUNDLED_MODEL_ASSET_PATH = "whisper/ggml-tiny-q5_1.bin"
   private var cachedWhisperModel: WhisperModel? = null
   private val whisperModelLock = Any()
+  private val whisperInferenceMutex = Mutex()
 
   /**
    * Complete capability registry mapping each source [ConvertibleFormat] to all target
@@ -2854,21 +2857,24 @@ object FileConverterEngine {
     context: Context,
     wavFile: File,
     defaultTitle: String = "Audio Transcript",
+    threadsOverride: Int? = null,
   ): SpeechTranscriptDocument? {
     if (!wavFile.exists() || wavFile.length() <= 44L) return null
     val model = getOrLoadWhisperModel(context) ?: return null
     return try {
-      val cpuCores = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+      val cpuCores = (threadsOverride ?: Runtime.getRuntime().availableProcessors()).coerceIn(1, 6)
       val config = WhisperConfig(
         language = "auto",
         translate = false,
         threads = cpuCores,
       )
-      val result = Whisper.transcribe(
-        model = model,
-        audioPath = wavFile.absolutePath,
-        config = config,
-      )
+      val result = whisperInferenceMutex.withLock {
+        Whisper.transcribe(
+          model = model,
+          audioPath = wavFile.absolutePath,
+          config = config,
+        )
+      }
       val segments = result.segments.mapNotNull { seg ->
         val cleaned = seg.text.trim()
         if (cleaned.isEmpty()) {

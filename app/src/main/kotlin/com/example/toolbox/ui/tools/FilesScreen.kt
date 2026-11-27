@@ -1240,7 +1240,7 @@ fun FilesScreen(
 
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-      // 4. File List / Grid or Empty State
+      // 4. Horizontally Paginated File List / Grid across Storage Volumes
       val activeVolumeForSwipe = remember(storageVolumes, activeVolume, currentDirectory, hasCustomRoot) {
         if (hasCustomRoot) {
           storageVolumes.firstOrNull { FileManagerEngine.isAtRootDirectory(currentDirectory, it.file) } ?: activeVolume
@@ -1252,16 +1252,6 @@ fun FilesScreen(
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
-          .swipeToSwitchPillView(
-            items = storageVolumes,
-            selectedItem = activeVolumeForSwipe,
-            enabled = !isSelectionMode && storageVolumes.size > 1,
-            onSelectItem = { volume ->
-              if (volume != null) {
-                navigateTo(volume.file)
-              }
-            },
-          )
           .pinchToChangeColumns(
             enabled = true,
             isListView = viewMode == FileViewMode.LIST,
@@ -1287,11 +1277,46 @@ fun FilesScreen(
             },
           ),
       ) {
-        if (processedItems.isEmpty()) {
+        ToolboxPillHorizontalPager(
+          items = storageVolumes,
+          selectedItem = activeVolumeForSwipe ?: storageVolumes.firstOrNull(),
+          enabled = !isSelectionMode && storageVolumes.size > 1,
+          key = { _, vol -> vol?.id ?: "default" },
+          onSelectItem = { volume ->
+            if (volume != null) {
+              navigateTo(volume.file)
+            }
+          },
+          modifier = Modifier.fillMaxSize(),
+        ) { pageVolume ->
+          val isActiveVolPage = pageVolume?.id == activeVolumeForSwipe?.id || storageVolumes.size <= 1
+          val pageGroupedItems = if (isActiveVolPage) {
+            groupedItems
+          } else {
+            remember(pageVolume, refreshTrigger, searchQuery, sortOrder, groupOption) {
+              val dir = pageVolume?.file
+              if (dir == null || !dir.exists()) {
+                emptyList()
+              } else {
+                val listed = FileManagerEngine.listDirectoryContents(dir)
+                val filtered = FileManagerEngine.filterFiles(listed, searchQuery)
+                FileManagerEngine.groupAndSortFiles(filtered, groupOption, sortOrder)
+              }
+            }
+          }
+          val pageProcessedItems = if (isActiveVolPage) {
+            processedItems
+          } else {
+            remember(pageGroupedItems) {
+              pageGroupedItems.flatMap { it.items }
+            }
+          }
+
+        if (pageProcessedItems.isEmpty()) {
           EmptyFilesView(
             isSearching = searchQuery.isNotEmpty(),
             searchQuery = searchQuery,
-            hasPermission = hasPermission || isBrowsingSamples,
+            hasPermission = hasPermission || isBrowsingSamples || pageVolume?.id == FileManagerEngine.SAMPLES_VOLUME_ID,
             onRequestPermission = { requestStoragePermission() },
             onCreateFolder = { showCreateFolderDialog = true },
             onCreateFile = { showCreateFileDialog = true },
@@ -1302,11 +1327,11 @@ fun FilesScreen(
               LazyColumn(
                 modifier = Modifier
                   .fillMaxSize()
-                  .testTag("files_list_view"),
+                  .then(if (isActiveVolPage) Modifier.testTag("files_list_view") else Modifier),
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
               ) {
-                groupedItems.forEach { group ->
+                pageGroupedItems.forEach { group ->
                   val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
                   if (group.title.isNotEmpty()) {
                     item(key = "header_${group.title}") {
@@ -1459,12 +1484,12 @@ fun FilesScreen(
                 columns = GridCells.Fixed(coercedColumns),
                 modifier = Modifier
                   .fillMaxSize()
-                  .testTag("files_grid_view"),
+                  .then(if (isActiveVolPage) Modifier.testTag("files_grid_view") else Modifier),
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(if (isCompactGrid) 6.dp else 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(if (isCompactGrid) 6.dp else 8.dp),
               ) {
-                groupedItems.forEach { group ->
+                pageGroupedItems.forEach { group ->
                   val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
                   if (group.title.isNotEmpty()) {
                     item(
@@ -1615,6 +1640,7 @@ fun FilesScreen(
             }
           }
           }
+        }
         }
       }
     }

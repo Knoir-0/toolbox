@@ -1770,20 +1770,11 @@ fun TodoListScreen(
           }
         }
 
-        // 4. Main Content Area (Scoped Storage Locked/Permission View or Task List)
+        // 4. Main Content Area (Scoped Storage Locked/Permission View or Horizontally Paginated Task List)
         Box(
           modifier = Modifier
             .weight(1f)
-            .fillMaxWidth()
-            .swipeToSwitchPillView(
-              items = TodoFilterTab.entries,
-              selectedItem = selectedTab,
-              enabled = isTodoFolderGranted && !isSelectionMode && draggedTaskId == null && draggedSubtaskId == null,
-              onSelectItem = { tab ->
-                selectedTab = tab
-                selectedTaskIds = emptySet()
-              },
-            ),
+            .fillMaxWidth(),
         ) {
           if (!isTodoFolderGranted) {
             if (pendingPermissionFolderPath != null) {
@@ -1803,47 +1794,79 @@ fun TodoListScreen(
           } else {
             val hasActiveSearchQuery = isSearchActive && searchQuery.isNotBlank()
 
-            when (selectedTab) {
-              TodoFilterTab.COMPLETED -> {
-                CompletedTasksListContent(
-                  completedTasks = filteredCompletedTasks,
-                  completedCount = completedTodayCount,
-                  hasSearchQuery = hasActiveSearchQuery,
-                  isSelectionMode = isSelectionMode,
-                  selectedTaskIds = selectedTaskIds,
-                  onToggleSelectTask = { taskId -> toggleTaskSelection(taskId) },
-                  historyVersion = historyVersion,
-                  onUncompleteTask = { task -> uncompleteTask(task) },
-                  onRemoveCompletedTask = { task -> deleteCompletedTask(task) },
-                )
-              }
-              TodoFilterTab.TASKS,
-              TodoFilterTab.SCHEDULED -> {
-                if (activeFilteredTasks.isEmpty()) {
-                  when {
-                    hasActiveSearchQuery -> EmptySearchTasksState()
-                    selectedTab == TodoFilterTab.SCHEDULED -> EmptyScheduledTasksState()
-                    else -> EmptyTasksState()
+            ToolboxPillHorizontalPager(
+              items = TodoFilterTab.entries,
+              selectedItem = selectedTab,
+              enabled = !isSelectionMode && draggedTaskId == null && draggedSubtaskId == null,
+              key = { _, tab -> tab.name },
+              onSelectItem = { tab ->
+                selectedTab = tab
+                selectedTaskIds = emptySet()
+              },
+              modifier = Modifier.fillMaxSize(),
+            ) { pageTab ->
+              val isActivePage = pageTab == selectedTab
+              when (pageTab) {
+                TodoFilterTab.COMPLETED -> {
+                  CompletedTasksListContent(
+                    completedTasks = filteredCompletedTasks,
+                    completedCount = completedTodayCount,
+                    hasSearchQuery = hasActiveSearchQuery,
+                    isSelectionMode = isSelectionMode,
+                    selectedTaskIds = selectedTaskIds,
+                    onToggleSelectTask = { taskId -> toggleTaskSelection(taskId) },
+                    historyVersion = historyVersion,
+                    onUncompleteTask = { task -> uncompleteTask(task) },
+                    onRemoveCompletedTask = { task -> deleteCompletedTask(task) },
+                  )
+                }
+                TodoFilterTab.TASKS,
+                TodoFilterTab.SCHEDULED -> {
+                  val pageFilteredTasks = remember(tasks, mainViewTasks, pageTab, hasActiveSearchQuery, searchQuery) {
+                    val base = if (pageTab == TodoFilterTab.SCHEDULED) {
+                      tasks.filter { it.isScheduled }
+                    } else {
+                      mainViewTasks
+                    }
+                    if (hasActiveSearchQuery) {
+                      TodoListEngine.filterTasks(base, searchQuery)
+                    } else {
+                      base
+                    }
                   }
-                } else {
-                  LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                      .fillMaxSize()
-                      .onGloballyPositioned { taskListCoordinates = it }
-                      .testTag("todo_tasks_list"),
-                    contentPadding = PaddingValues(
-                      start = 12.dp,
-                      end = 12.dp,
-                      top = 8.dp,
-                      bottom = 104.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                  ) {
-                    items(
-                      items = activeFilteredTasks,
-                      key = { it.id },
-                    ) { task ->
+                  if (pageFilteredTasks.isEmpty()) {
+                    when {
+                      hasActiveSearchQuery -> EmptySearchTasksState()
+                      pageTab == TodoFilterTab.SCHEDULED -> EmptyScheduledTasksState()
+                      else -> EmptyTasksState()
+                    }
+                  } else {
+                    val pageListState = if (isActivePage) listState else rememberLazyListState()
+                    LazyColumn(
+                      state = pageListState,
+                      modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                          if (isActivePage) {
+                            Modifier
+                              .onGloballyPositioned { taskListCoordinates = it }
+                              .testTag("todo_tasks_list")
+                          } else {
+                            Modifier
+                          }
+                        ),
+                      contentPadding = PaddingValues(
+                        start = 12.dp,
+                        end = 12.dp,
+                        top = 8.dp,
+                        bottom = 104.dp,
+                      ),
+                      verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                      items(
+                        items = pageFilteredTasks,
+                        key = { it.id },
+                      ) { task ->
                       val isBeingDragged = draggedTaskId == task.id
                       val isEditingInline = inlineEditingTaskId == task.id
                       SwipeableTaskItem(
@@ -1910,6 +1933,7 @@ fun TodoListScreen(
                           },
                         ),
                       )
+                      }
                     }
                   }
                 }

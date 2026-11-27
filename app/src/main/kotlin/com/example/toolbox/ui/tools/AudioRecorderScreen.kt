@@ -958,6 +958,24 @@ fun AudioRecorderScreen(
       },
     )
 
+    val activeRecorderFolderPill = remember(folderPills, selectedFolder, pendingPermissionFolder) {
+      val target = pendingPermissionFolder ?: selectedFolder
+      folderPills.firstOrNull { it.displayPath.equals(target.displayPath, ignoreCase = true) } ?: selectedFolder
+    }
+
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .weight(1f)
+        .swipeToSwitchPillView(
+          items = folderPills,
+          selectedItem = activeRecorderFolderPill,
+          enabled = !isRecording && folderPills.size > 1,
+          onSelectItem = { folder ->
+            handleFolderPillTap(folder)
+          },
+        ),
+    ) {
     // Optional Microphone Permission Banner (shown once folder storage access is granted)
     if (isRecorderEnabled && !hasMicPermission) {
       Card(
@@ -1006,157 +1024,181 @@ fun AudioRecorderScreen(
       }
     }
 
-    // 3. Top Section: Recording List View or Scoped Folder Permission Request View (positioned above the recording buttons)
-    val folderAwaitingPermission = pendingPermissionFolder?.takeIf { !isFolderGranted(it) }
-    val activeRecorderFolderPill = remember(folderPills, selectedFolder, pendingPermissionFolder) {
-      val target = pendingPermissionFolder ?: selectedFolder
-      folderPills.firstOrNull { it.displayPath.equals(target.displayPath, ignoreCase = true) } ?: selectedFolder
-    }
-    Column(
+    // 3. Top Section: Horizontally Paginated Recording List View or Scoped Folder Permission Request View
+    ToolboxPillHorizontalPager(
+      items = folderPills,
+      selectedItem = activeRecorderFolderPill,
+      enabled = !isRecording && folderPills.size > 1,
+      key = { _, folder -> folder.displayPath },
+      onSelectItem = { folder ->
+        handleFolderPillTap(folder)
+      },
       modifier = Modifier
         .fillMaxWidth()
         .weight(0.54f)
-        .swipeToSwitchPillView(
-          items = folderPills,
-          selectedItem = activeRecorderFolderPill,
-          enabled = !isRecording && folderPills.size > 1,
-          onSelectItem = { folder ->
-            handleFolderPillTap(folder)
-          },
-        )
-        .padding(horizontal = 16.dp, vertical = 10.dp)
         .testTag("recordings_section"),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      if (folderAwaitingPermission != null) {
-        FolderPermissionRequestView(
-          folder = folderAwaitingPermission,
-          onAllowAccess = {
-            requestSystemFolderAccess(folderAwaitingPermission)
-          },
-          modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f),
-        )
-      } else if (!isSelectedFolderGranted) {
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-          ),
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-          modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f)
-            .testTag("locked_storage_state"),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-          ) {
-            Box(
-              modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp),
-              )
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-              text = "Storage access is locked",
-              style = MaterialTheme.typography.bodyLarge,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-              textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = "Tap the lock icon on a folder pill above to grant permission to access files in that location.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.Center,
-            )
-          }
-        }
-      } else if (recordings.isEmpty()) {
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-          ),
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-          modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f)
-            .testTag("empty_recordings_state"),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-          ) {
-            Box(
-              modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.AudioFile,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp),
-              )
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-              text = if (isSearchActive && searchQuery.isNotBlank()) {
-                "No recordings matching \"${searchQuery.trim()}\" in $directoryDisplayPath"
-              } else {
-                "No recordings in $directoryDisplayPath"
-              },
-              style = MaterialTheme.typography.bodyLarge,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-              textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = if (isSearchActive && searchQuery.isNotBlank()) {
-                "Try a different search query or switch folders above."
-              } else {
-                "Tap the microphone button below to record and save a timestamped audio file."
-              },
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.Center,
-            )
-          }
-        }
+    ) { pageFolder ->
+      val isActiveFolderPage = pageFolder.displayPath.equals(activeRecorderFolderPill.displayPath, ignoreCase = true)
+      val isPageFolderGranted = isFolderGranted(pageFolder)
+      val pageFolderAwaitingPerm = if (isActiveFolderPage) {
+        pendingPermissionFolder?.takeIf { !isFolderGranted(it) }
       } else {
-        LazyColumn(
-          state = recordingsListState,
-          modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f)
-            .testTag("recordings_list"),
-          verticalArrangement = Arrangement.spacedBy(8.dp),
-          contentPadding = PaddingValues(bottom = 12.dp),
-        ) {
-          groupedRecordings.forEach { group ->
+        pageFolder.takeIf { !isPageFolderGranted }
+      }
+      val pageDirDisplayPath = pageFolder.displayPath
+      val pageGroupedRecordings = if (isActiveFolderPage) {
+        groupedRecordings
+      } else {
+        remember(pageFolder, isPageFolderGranted, refreshTrigger, isInspection, isSearchActive, searchQuery, sortOrder, groupOption) {
+          if (!isPageFolderGranted) {
+            emptyList()
+          } else {
+            val dir = resolveDirectoryForFolder(pageFolder)
+            val raw = if (isInspection) emptyList() else AudioRecorderEngine.listRecordings(dir, includeDurationMetadata = true)
+            val filtered = if (isSearchActive && searchQuery.isNotBlank()) AudioRecorderEngine.filterRecordings(raw, searchQuery) else raw
+            val sorted = AudioRecorderEngine.sortRecordings(filtered, sortOrder)
+            AudioRecorderEngine.groupRecordings(sorted, groupOption)
+          }
+        }
+      }
+      val pageHasRecordings = pageGroupedRecordings.any { it.items.isNotEmpty() }
+
+      Column(
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        if (pageFolderAwaitingPerm != null) {
+          FolderPermissionRequestView(
+            folder = pageFolderAwaitingPerm,
+            onAllowAccess = {
+              requestSystemFolderAccess(pageFolderAwaitingPerm)
+            },
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f),
+          )
+        } else if (!isPageFolderGranted) {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f)
+              .then(if (isActiveFolderPage) Modifier.testTag("locked_storage_state") else Modifier),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.Center,
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(48.dp)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Lock,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(24.dp),
+                )
+              }
+              Spacer(modifier = Modifier.height(10.dp))
+              Text(
+                text = "Storage access is locked",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+              Text(
+                text = "Tap the lock icon on a folder pill above to grant permission to access files in that location.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+              )
+            }
+          }
+        } else if (!pageHasRecordings) {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f)
+              .then(if (isActiveFolderPage) Modifier.testTag("empty_recordings_state") else Modifier),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.Center,
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(48.dp)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Default.AudioFile,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(24.dp),
+                )
+              }
+              Spacer(modifier = Modifier.height(10.dp))
+              Text(
+                text = if (isSearchActive && searchQuery.isNotBlank()) {
+                  "No recordings matching \"${searchQuery.trim()}\" in $pageDirDisplayPath"
+                } else {
+                  "No recordings in $pageDirDisplayPath"
+                },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+              Text(
+                text = if (isSearchActive && searchQuery.isNotBlank()) {
+                  "Try a different search query or switch folders above."
+                } else {
+                  "Tap the microphone button below to record and save a timestamped audio file."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+              )
+            }
+          }
+        } else {
+          val pageListState = if (isActiveFolderPage) recordingsListState else rememberLazyListState()
+          LazyColumn(
+            state = pageListState,
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f)
+              .then(if (isActiveFolderPage) Modifier.testTag("recordings_list") else Modifier),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 12.dp),
+          ) {
+            pageGroupedRecordings.forEach { group ->
             val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
             if (group.title.isNotEmpty()) {
               item(key = "header_${group.title}") {
@@ -1219,6 +1261,7 @@ fun AudioRecorderScreen(
             }
           }
         }
+      }
       }
     }
 
@@ -1692,6 +1735,7 @@ fun AudioRecorderScreen(
           modifier = Modifier.testTag("recorder_instruction_text"),
         )
       }
+    }
     }
   }
 

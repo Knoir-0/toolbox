@@ -539,84 +539,99 @@ fun TerminalScreen(
               }
             }
 
-            LazyColumn(
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-              modifier = Modifier
-                .fillMaxSize()
-                .swipeToSwitchPillView(
-                  items = TerminalCommandCategory.entries,
-                  selectedItem = selectedCatalogCategory,
-                  onSelectItem = { category ->
-                    selectedCatalogCategory = category
-                  },
-                ),
-            ) {
-              if (filteredCatalogPresets.isEmpty()) {
-                item {
-                  Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(
-                      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                  ) {
-                    Column(
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                      horizontalAlignment = Alignment.CenterHorizontally,
-                      verticalArrangement = Arrangement.spacedBy(6.dp),
+            ToolboxPillHorizontalPager(
+              items = TerminalCommandCategory.entries,
+              selectedItem = selectedCatalogCategory,
+              key = { _, cat -> cat.name },
+              onSelectItem = { category ->
+                selectedCatalogCategory = category
+              },
+              modifier = Modifier.fillMaxSize(),
+            ) { pageCategory ->
+              val pagePresets = if (pageCategory == selectedCatalogCategory) {
+                filteredCatalogPresets
+              } else {
+                remember(searchQuery, pageCategory, favoriteCommandIds, customCommands) {
+                  TerminalCatalog.filterPresets(
+                    query = searchQuery,
+                    category = pageCategory,
+                    favoriteIds = favoriteCommandIds,
+                    customPresets = customCommands,
+                  )
+                }
+              }
+
+              LazyColumn(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize(),
+              ) {
+                if (pagePresets.isEmpty()) {
+                  item {
+                    Card(
+                      shape = RoundedCornerShape(14.dp),
+                      colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                      ),
+                      modifier = Modifier.fillMaxWidth(),
                     ) {
-                      Text(
-                        text = "No matching shell commands",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                      )
-                      Text(
-                        text = "Try searching for logcat, dumpsys, getprop, ip, df, or save a custom command.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      )
+                      Column(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Text(
+                          text = "No matching shell commands",
+                          style = MaterialTheme.typography.bodyLarge,
+                          fontWeight = FontWeight.SemiBold,
+                          color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                          text = "Try searching for logcat, dumpsys, getprop, ip, df, or save a custom command.",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                      }
                     }
                   }
-                }
-              } else {
-                items(
-                  items = filteredCatalogPresets,
-                  key = { it.id },
-                ) { preset ->
-                  val isFav = preset.id in favoriteCommandIds
-                  TerminalPresetCatalogCard(
-                    preset = preset,
-                    isFavorite = isFav,
-                    onRunCommand = {
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                      closeSearch()
-                      controller.executeCommand(preset.command)
-                    },
-                    onInsertCommand = {
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                      closeSearch()
-                      commandInput = TextFieldValue(
-                        text = preset.command,
-                        selection = TextRange(preset.command.length),
-                      )
-                    },
-                    onToggleFavorite = {
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                      controller.toggleFavoriteCommand(preset.id)
-                    },
-                    onDeleteCustom = if (preset.isCustom) {
-                      {
+                } else {
+                  items(
+                    items = pagePresets,
+                    key = { it.id },
+                  ) { preset ->
+                    val isFav = preset.id in favoriteCommandIds
+                    TerminalPresetCatalogCard(
+                      preset = preset,
+                      isFavorite = isFav,
+                      onRunCommand = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        controller.deleteCustomCommand(preset.id)
-                      }
-                    } else {
-                      null
-                    },
-                  )
+                        closeSearch()
+                        controller.executeCommand(preset.command)
+                      },
+                      onInsertCommand = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        closeSearch()
+                        commandInput = TextFieldValue(
+                          text = preset.command,
+                          selection = TextRange(preset.command.length),
+                        )
+                      },
+                      onToggleFavorite = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        controller.toggleFavoriteCommand(preset.id)
+                      },
+                      onDeleteCustom = if (preset.isCustom) {
+                        {
+                          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                          controller.deleteCustomCommand(preset.id)
+                        }
+                      } else {
+                        null
+                      },
+                    )
+                  }
                 }
               }
             }
